@@ -292,7 +292,7 @@ def transcribe_mp3():
     except PermissionError:
         print(f"Error: Insufficient permissions to rename '{file_to_transcribe}'.")
     except Exception as e:
-        print(f"ERROR renameing {file_to_transcribe} to {new_filename} {e}")   
+        print(f"ERROR renaming {file_to_transcribe} to {new_filename} {e}")   
 
 def approve_deviceuser(delegated_email, service_account_file):
     gh = lib_googlehandler.GoogleService(
@@ -555,8 +555,8 @@ def main():
         except PermissionError:
             print(f"Error: Insufficient permissions to rename '{file_to_transcribe}'.")
         except Exception as e:
-            print(f"ERROR renameing {file_to_transcribe} to {new_filename} {e}")   
-
+            print(f"ERROR renaming {file_to_transcribe} to {new_filename} {e}")   
+ 
         timenow= dt_datetime.now(dt_timezone.utc)
         timeformat= timenow.strftime('%Y-%m-%d-%H%M')
         filename = f"transcript_{timeformat}.txt"
