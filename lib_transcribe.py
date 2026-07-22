@@ -124,7 +124,201 @@ class Transcriber():
             )
 
 
+    def transcribe_audio_lecture(self,
+        audio_file_path: str, 
+        ):
+        with open(audio_file_path, "rb") as f:
+                    audio_bytes = f.read()
+        audio_part = types.Part.from_bytes(
+            data=audio_bytes,
+            mime_type="audio/mp3" # Update as needed for your file type
+            )
+        safety_settings = [
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                ),
+            ]
+        print("Sending Lecture Audio To Gemini")
+        prompt = """
+                    You are an expert enterprise transcriptionist. I want you to perform a two-pass analysis of this audio file which is
+                    a presentation or a lecture. 
+                    """
+        
+        if self.supplied_context:
+            prompt += "\n This is additional context for this specific transcription: "
+            prompt += self.supplied_context    
+        prompt +="""    
+            PASS 1 (Analysis): 
+            Analyze the first 5 minutes of the audio. Pay close attention to the pre-amble or initial introductions. 
+            Identify the title of the lecture or presentation, 
+            the purpose of the lecture, the identity of the speaker and the timestamp stated.  """
+        
+        prompt += """
+            PASS 2 (Transcription):
+            Using the identities and context you extracted in Pass 1, transcribe the entire audio file from the very beginning (00:00). 
+            Use the correct speaker names to label the dialogue throughout. Provide a completely verbatim transcription, word-for-word.
+            Ensure that swearing, offensive language and all inappropriate language is transcribed: the transcription must be good enough 
+            to use as evidence
+            in the case of disciplinary action.
+
+            At the end of the transcription, provide a summary of the conversation with a bullet list of any action points or decisions.
+
+            Extract the following into the provided JSON schema:
+            1. The title of the lecture or presentation.
+            2. A concise summary of the lecture.
+            3. The exact dictated preamble notes (if the speaker says 'these are the preamble notes').
+            4. The complete verbatim transcript of the actual lecture or presentation. 
+
+            Output Format:
+            Meeting Metadata:
+            - Date/Timestamp: [Extracted Timestamp]
+            - Lecture Title: [Extracted Title]
+            - Summary: [Extracted Summary]
+
+            Transcript:
+            [Speaker Name]: [Dialogue]
+            """
+        print(prompt)  
+        response_stream = self.ai_client.models.generate_content_stream(
+            model='gemini-3.5-flash',
+            contents=[prompt, audio_part],
+            config=types.GenerateContentConfig(
+                    safety_settings=safety_settings
+                ))
+        print("\n--- Live Lecture Transcription Starting ---")
+        transcript_text = f"Transcription of {audio_file_path}\n\n"
+
+    
+        # Loop through the stream and print it live   
+        for chunk in response_stream:
+            # Print the chunk to the terminal without a new line, and force it to display immediately
+            print(chunk.text, end="", flush=True) 
+            # Add the chunk to our master string
+            transcript_text += chunk.text
+
+        return transcript_text
+
+
     def transcribe_audio(self,
+        audio_file_path: str, 
+        ):
+        """Returns audio in JSON """
+        #ai_client = genai.Client(
+        #    vertexai=True, 
+        #    project=self.project_id, 
+        #    location=self.location,
+        #    credentials=self.vertex_creds
+        #    )
+        with open(audio_file_path, "rb") as f:
+            audio_bytes = f.read()
+        audio_part = types.Part.from_bytes(
+            data=audio_bytes,
+            mime_type="audio/mp3" # Update as needed for your file type
+            )
+        safety_settings = [
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                ),
+            ]
+        print("Sending Audio To Gemini")
+
+        prompt = """
+            You are an expert enterprise transcriptionist. I want you to perform a two-pass analysis of this audio file. 
+            """
+
+        if self.supplied_context:
+            prompt += "\n This is additional context for this specific transcription: "
+            prompt += self.supplied_context    
+        prompt +="""    
+            PASS 1 (Analysis): 
+            Analyze the first 5 minutes of the audio. Pay close attention to the pre-amble or initial introductions. 
+            Identify the names of all attendees, the purpose of the meeting, and the timestamp stated.  Generally the audio will 
+            be introduced by an attendee
+            of the meeting. They may list the attendees who are invited and may give the purpose of the meeting and the date time of
+            the meeting.  """
+        prompt += self.transcribe_prompt_additional_1 
+        prompt += """
+            PASS 2 (Transcription):
+            Using the identities and context you extracted in Pass 1, transcribe the entire audio file from the very beginning (00:00). 
+            Use the correct speaker names to label the dialogue throughout. Provide a completely verbatim transcription, word-for-word.
+            Ensure that swearing, offensive language and all inappropriate language is transcribed: the transcription must be good enough to use as evidence
+            in the case of disciplinary action.
+
+            At the end of the transcription, provide a summary of the conversation with a bullet list of any action points or decisions.
+
+            Extract the following into the provided JSON schema:
+            1. A list of all attendees.
+            2. A concise summary of the meeting's outcome.
+            3. The exact dictated preamble notes (if the speaker says 'these are the preamble notes').
+            4. The complete verbatim transcript of the actual meeting. 
+
+            Output Format:
+            Meeting Metadata:
+            - Date/Timestamp: [Extracted Timestamp]
+            - Purpose: [Extracted Purpose]
+            - Attendees: [List of Names]
+
+            Transcript:
+            [Speaker Name]: [Dialogue]
+            """
+        print(prompt)  
+        response_stream = self.ai_client.models.generate_content_stream(
+            model='gemini-3.5-flash',
+            contents=[prompt, audio_part],
+            config=types.GenerateContentConfig(
+                # safety_settings=safety_settings
+                temperature=0.0,
+                response_mime_type="application/json",
+                response_schema=MeetingRecord,
+                )
+            )
+        print("\n--- Live Transcription Starting ---")
+         # We need a string to hold the final output for Google Drive
+        timenow= dt_datetime.now(dt_timezone.utc)
+        timeformat= timenow.strftime('%Y-%m-%d-%H%M')
+        transcript_text = ""
+
+        for chunk in response_stream:
+
+            # Print the chunk to the terminal without a new line, and force it to display immediately
+            print(chunk.text, end="", flush=True) 
+            # Add the chunk to our master string
+            transcript_text += chunk.text
+        meeting_data = json.loads(transcript_text)
+
+
+        with open('output.json', 'w') as f:
+            # Use json.dump to write the data to the file
+            json.dump(meeting_data, f, indent=4)
+        return meeting_data   
+
+    def transcribe_audio__2(self,
         audio_file_path: str, 
         source_type: str = "meeting",
         uploadtodrive: bool = False

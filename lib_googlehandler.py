@@ -93,7 +93,17 @@ class GoogleService():
     @cached_property
     def get_serviceaccount_admin(self):
         return build('admin', 'directory_v1', 
-                     credentials=self.base_creds.with_subject(self.delegated_email))
+                    credentials=self.base_creds.with_subject(self.delegated_email))
+
+    @cached_property
+    def get_serviceaccount_docs(self):
+        return build('docs', 'v1', 
+            credentials=self.base_creds.with_subject(self.drive_owner_email))
+
+    @cached_property
+    def get_serviceaccount_drive(self):
+        return build('drive', 'v3', 
+            credentials=self.base_creds.with_subject(self.drive_owner_email))
 
     def pick_vault_export(self,
                         vault_matter_id:str=None):
@@ -454,8 +464,43 @@ class GoogleService():
                     body=body
                 ).execute()
 
-    
+    def create_document(self,
+                        parent_folder_id:str,
+                        filename:str,
+                        body_text:str):
+        # creates in root drive
+        doc_body = {'title': filename}
+        doc = self.get_serviceaccount_docs.documents().create(body=doc_body).execute()
+        doc_id = doc.get('documentId')
+        body_text += f"\n\nDocument Link: https://docs.google.com/document/d/{doc_id}/edit {filename}"
+        requests = [
+        {
+            'insertText': {
+                'location': {'index': 1},
+                'text': body_text
+            }
+        }
+        ]
+        self.get_serviceaccount_docs.documents().batchUpdate(documentId=doc_id, body={'requests': requests}).execute()
 
+        # 3. Move the document to the specific folder using Drive API
+        if parent_folder_id:
+            drive_service = self.get_serviceaccount_drive
+            
+            # Retrieve the existing parents to remove (usually just the root folder)
+            file = drive_service.files().get(fileId=doc_id, fields='parents').execute()
+            previous_parents = ",".join(file.get('parents', []))
+            
+            # Move the file to the new folder
+            drive_service.files().update(
+                fileId=doc_id,
+                addParents=parent_folder_id,
+                removeParents=previous_parents,
+                fields='id, parents'
+            ).execute()
+            
+        print("Success! Document created and populated.")
+        print(f"Document Link: https://docs.google.com/document/d/{doc_id}/edit")
 class GoogleUser:
     def __init__(self,
                  email=None,

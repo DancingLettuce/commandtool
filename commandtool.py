@@ -531,6 +531,53 @@ def main():
                                      resetpassword=True, 
                                      movetodefaultou=True)
             print(f"{account_email} {response}")
+    elif args_command == 'transcribe_lecture':
+        file_to_transcribe = get_file(folder_path='', filetype='.mp3', days=99)
+        if not file_to_transcribe:
+            print(f"No file")
+            sys.exit()   
+        print("Provide additional supplied context")
+        supplied_context = helperlib.get_multiline_input()
+        transcribe = lib_transcribe.Transcriber(
+                project_id=CONFIG.get('TRANSCRIBER_PROJECT_ID',""),
+                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                supplied_context=supplied_context, 
+                )    
+        transcript_text = transcribe.transcribe_audio_lecture(audio_file_path=file_to_transcribe) 
+        new_filename = f"{file_to_transcribe}.transcribed"
+    
+        try:
+            # Rename the file
+            os.rename(file_to_transcribe, new_filename)
+            print(f"Successfully renamed '{file_to_transcribe}' to '{new_filename}'")
+        except FileNotFoundError:
+            print(f"Error: The file '{file_to_transcribe}' could not be found in the current directory.")
+        except PermissionError:
+            print(f"Error: Insufficient permissions to rename '{file_to_transcribe}'.")
+        except Exception as e:
+            print(f"ERROR renameing {file_to_transcribe} to {new_filename} {e}")   
+
+        timenow= dt_datetime.now(dt_timezone.utc)
+        timeformat= timenow.strftime('%Y-%m-%d-%H%M')
+        filename = f"transcript_{timeformat}.txt"
+        with open(filename, 'w') as f:
+            f.write(transcript_text)
+        print(f"Success! File saved. {filename}")
+         # ---------------------------------------------------------
+        # 5. Create Document & Insert Text
+        # ---------------------------------------------------------
+        transcribe_owner_email = CONFIG.get('TRANSCRIBE_OWNER_EMAIL',"")
+        print(f"Creating document in {transcribe_owner_email}'s account...")
+
+        gh = lib_googlehandler.GoogleService(
+                drive_owner_email=transcribe_owner_email,
+                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                )
+        gh.create_document(
+            parent_folder_id=CONFIG.get('TRANSCRIBE_FOLDER_ID',""),
+            filename=filename,
+            body_text=transcript_text
+            )
 
     else:  
         print(f"No command passed {args_command}.") 
