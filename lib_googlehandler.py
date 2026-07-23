@@ -279,7 +279,7 @@ class GoogleService():
                 continue # If download fails, skip upload for this file
 
             # --- B. UPLOAD ---
-            print(f"        UPLOADING: {local_filename} to Drive... ", end="", flush=True)
+            print(f"        UPLOADING: {local_filename} to Drive... https://drive.google.com/drive/u/9/folders/{drive_folder_id}", end="", flush=True)
             mime_type, _ = mimetypes.guess_type(local_filepath)
             if mime_type is None:
                 mime_type = 'application/octet-stream'
@@ -425,7 +425,6 @@ class GoogleService():
         """Suspends a user account."""
         body = {"suspended": True}
         return self.get_serviceaccount_admin.users().update(userKey=account_email, body=body).execute()
-
     def reactivate_and_reset_user(self, account_email: str, new_password: str):
         """
         Unarchives, unsuspends, updates the user's password, 
@@ -444,7 +443,6 @@ class GoogleService():
             userKey=account_email, 
             body=body
         ).execute()
-
     def patch_user(self,account_email: str, 
                 unsuspend:bool = False, 
                 resetpassword:bool=False, 
@@ -463,7 +461,6 @@ class GoogleService():
                     userKey=account_email, 
                     body=body
                 ).execute()
-
     def create_document(self,
                         parent_folder_id:str,
                         filename:str,
@@ -539,11 +536,9 @@ class GoogleUser:
                 self.groups.append(email)
                 if not self.is_in_google_group_highlight:
                     if email in (self.google_group_highlight):
-                        self.is_in_google_group_highlight = True
-        
+                        self.is_in_google_group_highlight = True    
     def is_active(self):
-        return not (self.suspended or self.archived)
-     
+        return not (self.suspended or self.archived)  
     def to_str(self):
         if self.error:
             message = f"{self.email} ERROR {self.error}"
@@ -551,7 +546,7 @@ class GoogleUser:
         message = f"{self.email} {'(Inactive)' if not self.is_active() else ''}"
         message += f"\n{self.orgunitpath}"
         message += f"\nCreated:{self.creationtime}"
-        message += f"\nLogon:{self.creationtime}"
+        message += f"\nLogon:{self.lastlogintime}" 
         return message 
     def delegates_to_str(self):
         message = ""

@@ -94,6 +94,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 #DEFAULT_CONFIG_PATH = SCRIPT_DIR / "secrets.toml" # for a local secrets or config file
 DEFAULT_CONFIG_PATH = SCRIPT_DIR.parent / "secrets" / "secrets.toml"
 DEFAULT_LOG_PATH = SCRIPT_DIR / "log.txt"
+ALLOWED_COMMANDS=['menu', 'questionary','upload','transcribe',
+                  'vault','test','approve_deviceuser',
+                  'delete_device','list_delegates','get_users',
+                  'list_user_groups','delegate_sheet',
+                  'unsuspendmoveouresetpassword','transcribe_lecture',
+                  'search_object','moveou']  
 ARGS, ARBITRARY_ARGS = init_argparse()
 import lib_helper_lib as helperlib 
 CONFIG = helperlib.init_secrets(toml_string=TOML_STRING,filename=ARGS.configfile) 
@@ -457,6 +463,10 @@ def main():
     fl = helperlib.ScriptLog()   
     args_command = ARGS.command 
 
+
+    if args_command not in ALLOWED_COMMANDS:    
+        allowed_commands_str = '\n** '.join(ALLOWED_COMMANDS) 
+        print(f"Command {args_command} not found. The possible commands are: {allowed_commands_str}")
     if (args_command == 'menu' or ARGS.command=='questionary') :
         if not imports_questionary:
             print(f"ERROR. Command line command {args_command} requires Questionary")
@@ -480,25 +490,20 @@ def main():
         export_id, export_name = googlehandler.pick_vault_export()
         googlehandler.download_vault_export(export_id=export_id, 
                                             export_name=export_name) 
-
     elif args_command == 'test':
         if not import_lib_localtest:
             print("No local test, exiting")
             return
         print (lib_localtest.mytext )
         lib_localtest.localtest()
-        
-
     elif args_command == 'approve_deviceuser':
         approve_deviceuser(
                 delegated_email=CONFIG['ADMIN_EMAIL'],
                 service_account_file=CONFIG['SERVICE_ACCOUNT_FILE'],)
-
     elif args_command == 'delete_device':
         delete_devices( 
             delegated_email=CONFIG['ADMIN_EMAIL'],
             service_account_file=CONFIG['SERVICE_ACCOUNT_FILE'],)
-    
     elif args_command == 'list_delegates' :
         list_delegates(
             delegated_email=CONFIG['ADMIN_EMAIL'],
@@ -531,6 +536,22 @@ def main():
                                      resetpassword=True, 
                                      movetodefaultou=True)
             print(f"{account_email} {response}")
+    elif args_command == 'moveou':
+            gh = lib_googlehandler.GoogleService(
+                            delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                            service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                            google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]) ,
+                            googleuser_account_password_default=CONFIG.get('GOOGLEUSER_ACCOUNT_PASSWORD_DEFAULT',""),
+                            googleuser_default_hold_ou=CONFIG.get('GOOGLEUSER_DEFAULT_HOLD_OU',""),
+                            )
+            account_emails = get_interactive_list()
+            for account_email in account_emails:
+                if not account_email:
+                    continue
+                response = gh.patch_user(account_email=account_email, unsuspend=False,
+                                         resetpassword=False, 
+                                         movetodefaultou=True)
+                print(f"{account_email} {response}")
     elif args_command == 'transcribe_lecture':
         file_to_transcribe = get_file(folder_path='', filetype='.mp3', days=99)
         if not file_to_transcribe:
@@ -544,8 +565,7 @@ def main():
                 supplied_context=supplied_context, 
                 )    
         transcript_text = transcribe.transcribe_audio_lecture(audio_file_path=file_to_transcribe) 
-        new_filename = f"{file_to_transcribe}.transcribed"
-    
+        new_filename = f"{file_to_transcribe}.transcribed"   
         try:
             # Rename the file
             os.rename(file_to_transcribe, new_filename)
@@ -556,7 +576,6 @@ def main():
             print(f"Error: Insufficient permissions to rename '{file_to_transcribe}'.")
         except Exception as e:
             print(f"ERROR renaming {file_to_transcribe} to {new_filename} {e}")   
- 
         timenow= dt_datetime.now(dt_timezone.utc)
         timeformat= timenow.strftime('%Y-%m-%d-%H%M')
         filename = f"transcript_{timeformat}.txt"
@@ -578,7 +597,23 @@ def main():
             filename=filename,
             body_text=transcript_text
             )
-
+    elif args_command == "search_object":
+        account_emails = get_interactive_list(default_interactive=lib_localtest.delegateaccount)
+        #gh = lib_googlehandler.GoogleService(
+        #        delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+        #        service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),)
+        message= ""
+        for account_email in account_emails:
+            if not account_email:
+                continue
+            dto=lib_djangoapp.search_object(search=account_email)
+            print()
+            for item, value in dto.items() :
+                print(item)
+                for item1 in value:
+                    print(f"{item1.get('name','')} {item1.get('description','')}")
+            print("*" * 80)
+        
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

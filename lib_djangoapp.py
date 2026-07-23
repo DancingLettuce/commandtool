@@ -19,3 +19,30 @@ def get_cmi(name):
 
     return cmi
 
+def search_object(search:str ):
+    dto_list = []
+    dto_dict={}
+    dto = {'search':search}
+    #new_dto = {**dto, 'description': description}
+    #results.append(new_dto)
+    objs = cmi_models.ConfigurationItem.objects.filter(name__icontains=search)
+    dto_dict['ConfigurationItem'] = [
+        dto | {'name':obj.name, 
+               'description': obj.description} for obj in objs
+        ] or [
+            dto | {'name':'n/a',
+                   'description': 'Not found in ConfigurationItem'}]
+
+    objs = gwa_models.GoogleUser.objects.filter(email__icontains=search)
+    dto_dict['GoogleUser'] = [
+        dto | {'name':obj.email, 
+               'description': obj.ou} for obj in objs
+        ] or [
+            dto | {'name':'n/a',
+                   'description': 'Not found in GoogleUser'}]
+    return dto_dict 
+    
+    #for obj in cmi :
+    #    new_dto = dto | {'description': obj.description}
+    #    dto_list.append(new_dto)
+    
