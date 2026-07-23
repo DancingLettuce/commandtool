@@ -174,9 +174,9 @@ class Transcriber():
             to use as evidence
             in the case of disciplinary action.
 
-            At the end of the transcription, provide a summary of the conversation with a bullet list of any action points or decisions.
+            At the end of the transcription, provide a summary of the conversation with a summary in bullet list format.
 
-            Extract the following into the provided JSON schema:
+            Extract the following :
             1. The title of the lecture or presentation.
             2. A concise summary of the lecture.
             3. The exact dictated preamble notes (if the speaker says 'these are the preamble notes').

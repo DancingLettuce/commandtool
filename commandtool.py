@@ -494,8 +494,19 @@ def main():
         if not import_lib_localtest:
             print("No local test, exiting")
             return
-        print (lib_localtest.mytext )
-        lib_localtest.localtest()
+        transcribe_owner_email = CONFIG.get('TRANSCRIBE_OWNER_EMAIL',"")
+        print(f"Creating document in {transcribe_owner_email}'s account...")
+
+        gh = lib_googlehandler.GoogleService(
+                drive_owner_email=transcribe_owner_email,
+                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                )
+        gh.create_document(
+            parent_folder_id=CONFIG.get('TRANSCRIBE_FOLDER_ID',""),
+            filename="myfile",
+            body_text="mytext"
+            )
+        print("done")
     elif args_command == 'approve_deviceuser':
         approve_deviceuser(
                 delegated_email=CONFIG['ADMIN_EMAIL'],
