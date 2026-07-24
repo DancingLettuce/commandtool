@@ -316,7 +316,8 @@ class GoogleService():
                 continue # If download fails, skip upload for this file
 
             # --- B. UPLOAD ---
-            print(f"        UPLOADING: {local_filename} to Drive... https://drive.google.com/drive/u/9/folders/{drive_folder_id}", end="", flush=True)
+            #print(f"        UPLOADING: {local_filename} to Drive... https://drive.google.com/drive/u/9/folders/{drive_folder_id}", end="", flush=True)
+            print(f"        UPLOADING: {local_filename} to Drive... https://drive.google.com/drive/u/9/folders/{drive_folder_id}")
             mime_type, _ = mimetypes.guess_type(local_filepath)
             if mime_type is None:
                 mime_type = 'application/octet-stream'
