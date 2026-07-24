@@ -14,7 +14,7 @@ sudo apt update && sudo apt install rsync -y
 
 import argparse   
 from pathlib import Path
-
+import sys  
 
 
 def init_argparse():
@@ -36,7 +36,13 @@ def init_argparse():
         """
         )
     parser.add_argument(
-            'param',
+            'param1',
+            type=str,
+            nargs='?',
+            help="The parameter for the command ."
+        )
+    parser.add_argument(
+            'param2',
             type=str,
             nargs='?',
             help="The parameter for the command ."
@@ -52,8 +58,8 @@ def init_argparse():
         default=DEFAULT_CONFIG_PATH,
         help="Path to the TOML configuration file."
         )
-    ARGS = parser.parse_args()
-    known, unknown = parser.parse_known_args()
+    #ARGS = parser.parse_args()
+    ARGS, unknown = parser.parse_known_args()
     # Convert the list of unknown args into a dictionary
     # This assumes the format is strictly --key value --key2 value2
     arbitrary_args = {}
@@ -89,24 +95,31 @@ TOML_STRING="""# Auto-generated default configuration
     TRANSCRIBE_PROMPT_ADDITIONAL_1 = ""
     TRANSCRIBE_OWNER_EMAIL = ""
     TRANSCRIBE_FOLDER_ID = ""
+    TRANSCRIBE_LECTURE_FOLDER_ID = ""
     """ 
 SCRIPT_DIR = Path(__file__).resolve().parent 
 #DEFAULT_CONFIG_PATH = SCRIPT_DIR / "secrets.toml" # for a local secrets or config file
 DEFAULT_CONFIG_PATH = SCRIPT_DIR.parent / "secrets" / "secrets.toml"
 DEFAULT_LOG_PATH = SCRIPT_DIR / "log.txt"
-ALLOWED_COMMANDS=['menu', 'questionary','upload','transcribe',
-                  'vault','test','approve_deviceuser',
-                  'delete_device','list_delegates','get_users',
-                  'list_user_groups','delegate_sheet',
-                  'unsuspendmoveouresetpassword','transcribe_lecture',
-                  'search_object','moveou']  
+#ALLOWED_COMMANDS=['menu', 'questionary','upload','transcribe',
+#                  'vault','test','approve_deviceuser',
+#                  'delete_device','list_delegates','get_users',
+#                  'list_user_groups','delegate_sheet',
+#                  'unsuspendmoveouresetpassword','transcribe_lecture',
+#                  'search_object','moveou']  
+ALLOWED_COMMANDS={
+    'menu':"", 'questionary':"",'upload':"",'transcribe':"",
+    'vault':"",'test':"",'approve_deviceuser':"",
+    'delete_device':"",'list_delegates':"",'get_users':"",
+    'list_user_groups':"",'delegate_sheet':"",
+    'unsuspendmoveouresetpassword':"",'transcribe_lecture':"param1=folderid",
+    'search_object':"",'moveou':"", "upload_file":"param1=folderid"} 
 ARGS, ARBITRARY_ARGS = init_argparse()
 import lib_helper_lib as helperlib 
 CONFIG = helperlib.init_secrets(toml_string=TOML_STRING,filename=ARGS.configfile) 
  
 from datetime import datetime as dt_datetime, timedelta  , timezone as dt_timezone 
 import subprocess
-import sys 
 import json 
 import os  
  
@@ -211,7 +224,10 @@ def get_file(folder_path: str,filetype: str='.mp3', days=7):
     # Iterate through files in the directory
     for file_path in folder.iterdir():
         # Check if it's a file and ends with .mp3 (handling both .mp3 and .MP3)
-        if file_path.is_file() and file_path.suffix.lower() == filetype:
+        if (file_path.is_file() and 
+            file_path.suffix.lower() == (filetype if filetype else file_path.suffix.lower())
+            and not file_path.name.startswith(".")
+            ):
             file_stat = file_path.stat()
             mod_time = file_stat.st_mtime
             
@@ -462,10 +478,10 @@ def main():
     tdiff = helperlib.TimeDiff()
     fl = helperlib.ScriptLog()   
     args_command = ARGS.command 
-
-
-    if args_command not in ALLOWED_COMMANDS:    
-        allowed_commands_str = '\n** '.join(ALLOWED_COMMANDS) 
+    args_param1 = ARGS.param1
+    args_param2 = ARGS.param2
+    if args_command not in ALLOWED_COMMANDS.keys(): 
+        allowed_commands_str = '\n** '.join(f"{key} {value}" for key, value in ALLOWED_COMMANDS.items())
         print(f"Command {args_command} not found. The possible commands are: {allowed_commands_str}")
     if (args_command == 'menu' or ARGS.command=='questionary') :
         if not imports_questionary:
@@ -624,7 +640,17 @@ def main():
                 for item1 in value:
                     print(f"{item1.get('name','')} {item1.get('description','')}")
             print("*" * 80)
-        
+    elif args_command=="upload_file": 
+        filename = get_file(folder_path='', filetype=None, days=7)
+        if not filename:
+            print(f"No file selected {filename}")
+            return
+        gh = lib_googlehandler.GoogleService(
+                        drive_owner_email=CONFIG.get('TRANSCRIBE_OWNER_EMAIL',""),
+                        service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                        drive_parent_folder_id=args_param1 if args_param1 else CONFIG.get('TRANSCRIBE_LECTURE_FOLDER_ID',"")
+                        )
+        gh.upload_file_todrive(local_filename=filename,)
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

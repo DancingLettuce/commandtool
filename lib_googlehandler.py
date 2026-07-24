@@ -184,7 +184,44 @@ class GoogleService():
             
         return f"{size:.2f} PB"
 
-    def download_vault_export(self,
+    def upload_file_todrive(self,local_filename:str):
+        print(f"Preparing Google Drive folder as {self.drive_owner_email}...")
+        drive_service = self.get_serviceaccount_drive
+
+        """folder_metadata = {
+                    'name': safe_folder_name,
+                    'mimeType': 'application/vnd.google-apps.folder',
+                    'parents': [self.drive_parent_folder_id]
+                }
+        try:
+                    drive_folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
+                    drive_folder_id = drive_folder.get('id')
+        except Exception as e:
+            print(f"CRITICAL ERROR: Failed to create Drive folder. {e}")
+            return"""
+        #print(f"        UPLOADING: {local_filename} to Drive... https://drive.google.com/drive/u/9/folders/{self.drive_parent_folder_id}", end="", flush=True)
+        print(f"        UPLOADING: {local_filename} to Drive... https://drive.google.com/drive/u/9/folders/{self.drive_parent_folder_id}") 
+        mime_type, _ = mimetypes.guess_type(local_filename)
+        if mime_type is None:
+            mime_type = 'application/octet-stream'
+            
+        file_metadata = {
+            'name': local_filename,
+            'parents': [self.drive_parent_folder_id]
+        }
+        
+        media = MediaFileUpload(local_filename, mimetype=mime_type, resumable=True)
+        print() 
+        try:
+            drive_service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id'
+            ).execute()
+            print("DONEUPLOAD")
+        except Exception as e:
+            print(f"FAILED UPLOAD: {e}")
+    def download_vault_export(self, 
         export_id:str=None, 
         export_name:str=None,
         base_download_directory:str=None):
