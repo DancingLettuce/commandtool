@@ -353,8 +353,8 @@ def get_interactive_list(default_interactive=None):
     interactive_list = []
     if ARGS.interactive:
         interactive_list = helperlib.get_multiline_input()
-    elif ARGS.param:
-        interactive_list = ARGS.param
+    elif ARGS.param1:
+        interactive_list = ARGS.param1
     else:
         interactive_list = default_interactive
     if isinstance(interactive_list,str): 
