@@ -101,19 +101,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 #DEFAULT_CONFIG_PATH = SCRIPT_DIR / "secrets.toml" # for a local secrets or config file
 DEFAULT_CONFIG_PATH = SCRIPT_DIR.parent / "secrets" / "secrets.toml"
 DEFAULT_LOG_PATH = SCRIPT_DIR / "log.txt"
-#ALLOWED_COMMANDS=['menu', 'questionary','upload','transcribe',
-#                  'vault','test','approve_deviceuser',
-#                  'delete_device','list_delegates','get_users',
-#                  'list_user_groups','delegate_sheet',
-#                  'unsuspendmoveouresetpassword','transcribe_lecture',
-#                  'search_object','moveou']  
 ALLOWED_COMMANDS={
     'menu':"", 'questionary':"",'upload':"",'transcribe':"",
     'vault':"",'test':"",'approve_deviceuser':"",
     'delete_device':"",'list_delegates':"",'get_users':"",
     'list_user_groups':"",'delegate_sheet':"",
     'unsuspendmoveouresetpassword':"",'transcribe_lecture':"param1=folderid",
-    'search_object':"",'moveou':"", "upload_file":"param1=folderid"} 
+    'search_object':"",'moveou':"", "upload_file":"param1=folderid",
+    "deprovision_user":"", "unsuspend_user":"", "suspend_user":"",
+    "delegate_account":"param1=mailbox param2=userwithaccess",}  
 ARGS, ARBITRARY_ARGS = init_argparse()
 import lib_helper_lib as helperlib 
 CONFIG = helperlib.init_secrets(toml_string=TOML_STRING,filename=ARGS.configfile) 
@@ -546,7 +542,23 @@ def main():
             service_account_file=CONFIG['SERVICE_ACCOUNT_FILE'],)
     elif args_command == 'delegate_sheet':
         delegate_sheet() 
-    elif args_command == 'unsuspendmoveouresetpassword':
+    elif args_command in ('unsuspendmoveouresetpassword','suspend_user',
+                        'unsuspend_user'):
+        unsuspend=False
+        resetpassword=False
+        movetodefaultou = False
+        suspend = False
+        if args_command == 'unsuspendmoveouresetpassword':
+            unsuspend=True
+            resetpassword=True
+            movetodefaultou = True
+        elif args_command == 'suspend_user':
+            suspend = True
+        elif args_command == 'unsuspend_user':
+            unsuspend=True
+        else:
+            print("ERROR IN COMMAND")
+            return 
         gh = lib_googlehandler.GoogleService(
                         delegated_email=CONFIG.get('ADMIN_EMAIL',""),
                         service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
@@ -559,9 +571,10 @@ def main():
         for account_email in account_emails:
             if not account_email:
                 continue
-            response = gh.patch_user(account_email=account_email, unsuspend=True,
-                                     resetpassword=True, 
-                                     movetodefaultou=True)
+            response = gh.patch_user(account_email=account_email, unsuspend=unsuspend,
+                                     resetpassword=resetpassword, 
+                                     movetodefaultou=movetodefaultou,
+                                     suspend=suspend,)
             print(f"{account_email} {response}")
     elif args_command == 'moveou':
             gh = lib_googlehandler.GoogleService(
@@ -651,6 +664,30 @@ def main():
                         drive_parent_folder_id=args_param1 if args_param1 else CONFIG.get('TRANSCRIBE_LECTURE_FOLDER_ID',"")
                         )
         gh.upload_file_todrive(local_filename=filename,)
+    elif args_command == "deprovision_user":
+        gh = lib_googlehandler.GoogleService(
+                                delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                                google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]) ,
+                                googleuser_account_password_default=CONFIG.get('GOOGLEUSER_ACCOUNT_PASSWORD_DEFAULT',""),
+                                googleuser_default_hold_ou=CONFIG.get('GOOGLEUSER_DEFAULT_HOLD_OU',""),
+                                )
+        account_emails = get_interactive_list()
+        for account_email in account_emails:
+            if not account_email:
+                continue
+            gh.deprovision_user(account_email=account_email)
+            print(f"{account_email} Done") 
+    elif args_command == "delegate_account":
+        gh = lib_googlehandler.GoogleService(
+                                        delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                                        service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                                        google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]) ,
+                                        googleuser_account_password_default=CONFIG.get('GOOGLEUSER_ACCOUNT_PASSWORD_DEFAULT',""),
+                                        googleuser_default_hold_ou=CONFIG.get('GOOGLEUSER_DEFAULT_HOLD_OU',""),
+                                        )
+        gh.delegate_account(mastermailbox_email=args_param1, 
+                            clientaccount_email=args_param2)
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

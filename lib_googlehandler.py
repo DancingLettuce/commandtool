@@ -27,12 +27,8 @@ except Exception as e:
      print(f"WARNING lib_googlevault: Cannot import Google SDK {e}")
      imports_google = False
 
-
-
-
 import lib_helper_lib as helperlib 
  
-
 @dataclass
 class GoogleService():
     delegated_email: str=""
@@ -406,9 +402,43 @@ class GoogleService():
         print(f"Failed to delete {device_name} after {max_retries} attempts.")
         return False
 
-    def delegate_account(self, service, mastermailbox_email, clientaccount_email):
-        """Delegate mastermailbox to clientaccount"""
-        pass 
+    def cccccbctkgrrctrbretgrvflegjtgclvkigukcbhiirr
+    (self, mastermailbox_email: str, clientaccount_email: str):
+        """
+        Delegates the mastermailbox (leaver) to the clientaccount (grantee).
+        Because this uses Domain-Wide Delegation impersonating the leaver, 
+        Google automatically forces the delegation to 'accepted', bypassing the invite email.
+        """
+        print(f"Delegating {mastermailbox_email}'s mailbox to {clientaccount_email}...")
+        
+        # 1. Impersonate the leaver's account
+        impersonated_creds = self.base_creds.with_subject(mastermailbox_email)
+        gmail_service = build('gmail', 'v1', credentials=impersonated_creds)
+        
+        delegate_body = {
+            'delegateEmail': clientaccount_email
+        }
+        
+        try:
+            # 2. Create the delegate. userId='me' uses the impersonated subject.
+            response = gmail_service.users().settings().delegates().create(
+                userId='me',
+                body=delegate_body
+            ).execute()
+            
+            status = response.get('verificationStatus', 'unknown')
+            print(f"  -> Success! Mailbox delegated. Status: {status}")
+            return response
+            
+        except HttpError as e:
+            if e.resp.status == 409:
+                print(f"  -> {clientaccount_email} is already a delegate for {mastermailbox_email}.")
+            else:
+                print(f"  -> HTTP Error delegating mailbox: {e.resp.status} - {e}")
+            return None
+        except Exception as e:
+            print(f"  -> Unknown Error delegating mailbox: {e}")
+            return None
 
     def list_delegates(self, account_email):
         print(f"getting delegates for {account_email}")
@@ -485,6 +515,7 @@ class GoogleService():
                 unsuspend:bool = False, 
                 resetpassword:bool=False, 
                 movetodefaultou:bool=False,
+                suspend:bool = False,
                 ):
         body = {}  
         if unsuspend:
@@ -495,6 +526,8 @@ class GoogleService():
             body["changePasswordAtNextLogin"] = False
         if movetodefaultou:
             body["orgUnitPath"] = self.googleuser_default_hold_ou
+        if suspend:
+            body["suspended"] = True
         return self.get_serviceaccount_admin.users().patch(
                     userKey=account_email, 
                     body=body
@@ -536,6 +569,79 @@ class GoogleService():
             
         print("Success! Document created and populated.")
         print(f"Document Link: https://docs.google.com/document/d/{doc_id}/edit")
+
+    def deprovision_user(self, account_email: str):
+        """
+        Deprovisions a user by removing them from all groups, 
+        revoking all OAuth tokens, and deleting App Specific Passwords (ASPs).
+        """
+        print(f"Starting deprovision process for {account_email}...")
+        admin_service = self.get_serviceaccount_admin
+
+        # 1. Remove from all groups
+        print(f"Fetching groups for {account_email}...")
+        groups = self.list_user_groups(account_email)
+        
+        if not groups:
+            print(f"  - User {account_email} is not a member of any groups.")
+        else:
+            for group in groups:
+                group_email = group.get('email')
+                if group_email:
+                    try:
+                        admin_service.members().delete(
+                            groupKey=group_email, 
+                            memberKey=account_email
+                        ).execute()
+                        
+                        print(f"  - Removed from group: {group_email}")
+                    except Exception as e:
+                        print(f"  - Error removing from {group_email}: {e}")
+
+        # 2. Revoke OAuth Tokens
+        print(f"Revoking OAuth tokens for {account_email}...")
+        try:
+            tokens_response = admin_service.tokens().list(userKey=account_email).execute()
+            tokens = tokens_response.get('items', [])
+            
+            if not tokens:
+                print("  - No OAuth tokens found.")
+            else:
+                for token in tokens:
+                    client_id = token.get('clientId')
+                    app_name = token.get('displayText', 'Unknown App')
+                    if client_id:
+                        admin_service.tokens().delete(
+                            userKey=account_email, 
+                            clientId=client_id
+                        ).execute()
+                        print(f"  - Revoked OAuth token for: {app_name} ({client_id})")
+        except Exception as e:
+            print(f"  - Error fetching/revoking OAuth tokens: {e}")
+
+        # 3. Revoke Application Specific Passwords (ASPs)
+        print(f"Revoking Application Specific Passwords for {account_email}...")
+        try:
+            asps_response = admin_service.asps().list(userKey=account_email).execute()
+            asps = asps_response.get('items', [])
+            
+            if not asps:
+                print("  - No ASPs found.")
+            else:
+                for asp in asps:
+                    code_id = asp.get('codeId')
+                    asp_name = asp.get('name', 'Unnamed ASP')
+                    if code_id:
+                        admin_service.asps().delete(
+                            userKey=account_email, 
+                            codeId=code_id
+                        ).execute()
+                        print(f"  - Revoked ASP: {asp_name} (ID: {code_id})")
+        except Exception as e:
+            print(f"  - Error fetching/revoking ASPs: {e}")
+            
+        print(f"Deprovisioning steps complete for {account_email}.")
+
 class GoogleUser:
     def __init__(self,
                  email=None,
@@ -604,4 +710,5 @@ class GoogleUser:
         for group in self.groups:
             message += f"{group};"
         return message 
+    
     
