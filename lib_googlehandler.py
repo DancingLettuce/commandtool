@@ -1,4 +1,4 @@
-"""This file is lib_googlevault.py"""
+"""This file is lib_googlehandler.py"""
 
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -13,6 +13,11 @@ try:
     # Google Auth Imports
     # pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
     # pip install google-cloud-storage
+    # pip install google-cloud-resource-manager 
+    #       https://docs.cloud.google.com/resource-manager/reference/rest/v3/folders/list
+    #       https://docs.cloud.google.com/python/docs/reference/cloudresourcemanager/latest
+    # pip install google-cloud-service-usage
+    # google-cloud-billing
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -22,6 +27,8 @@ try:
     from google.cloud import storage
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+    from google.cloud import resourcemanager_v3 
+    from google.cloud import service_usage_v1
     imports_google = True
 except Exception as e:
      print(f"WARNING lib_googlevault: Cannot import Google SDK {e}")
@@ -42,7 +49,11 @@ class GoogleService():
         'https://www.googleapis.com/auth/admin.directory.user.security',
         'https://www.googleapis.com/auth/ediscovery',            # Vault API
         'https://www.googleapis.com/auth/drive',                 # Drive API
-        'https://www.googleapis.com/auth/devstorage.read_only'   # Cloud Storage API
+        'https://www.googleapis.com/auth/devstorage.read_only',   # Cloud Storage API
+        'https://www.googleapis.com/auth/cloud-platform.read-only', # GCP Resource Manager API, can't use this with workspace unless scope assigned
+        ]
+    # scopes are assigned under domain wide delegation in Google Worskpace admin.google.com
+    SCOPES_GCP = ['https://www.googleapis.com/auth/cloud-platform.read-only', # GCP Resource Manager API, can't use this with workspace
         ]
     service_account_file: str=""
     vault_matter_id: str="" 
@@ -70,6 +81,7 @@ class GoogleService():
                 subject=delegated_email
             )
         return build(api_servicename, api_version, credentials=creds)
+
 
     @cached_property
     def get_serviceaccount_gmailv1(self):
@@ -401,9 +413,8 @@ class GoogleService():
                 
         print(f"Failed to delete {device_name} after {max_retries} attempts.")
         return False
-
-    def cccccbctkgrrctrbretgrvflegjtgclvkigukcbhiirr
-    (self, mastermailbox_email: str, clientaccount_email: str):
+  
+    def delegate_account(self, mastermailbox_email: str, clientaccount_email: str):
         """
         Delegates the mastermailbox (leaver) to the clientaccount (grantee).
         Because this uses Domain-Wide Delegation impersonating the leaver, 
@@ -641,6 +652,105 @@ class GoogleService():
             print(f"  - Error fetching/revoking ASPs: {e}")
             
         print(f"Deprovisioning steps complete for {account_email}.")
+
+    # Google Compute Platform
+    def list_all_projects(self, query: str = "NOT id:sys-* AND NOT id:app-*"):
+        #Google Cloud's Resource Manager API utilizes the AIP-160 filtering standard 
+        print(f"Fetching accessible Google Cloud Projects Query={query}")
+        
+        # Initializes the Resource Manager client using your base Service Account credentials
+        client = resourcemanager_v3.ProjectsClient(credentials=self.base_creds)
+        pcount=0
+
+        try:
+            # Searching without a query returns all accessible projects
+            projects = client.search_projects(query=query)
+            
+            project_list = []
+            for project in projects:
+                pcount += 1
+                print(f"{pcount} Project ID: {project.project_id} | Name: {project.display_name} ")
+                self.list_enabled_apis(project_id=project.project_id)
+                project_list.append(project)
+                
+            return project_list
+            
+        except Exception as e:
+            print(f"CRITICAL API ERROR: Failed to list GCP projects. {e}")
+            return None
+    def list_enabled_apis(self, project_id: str):
+        """
+        Lists all enabled APIs for a given project ID or Number.
+        Returns a list of API names (e.g., ['compute.googleapis.com', 'storage-api.googleapis.com'])
+        """
+        print(f"Fetching enabled APIs for project: {project_id}...")
+        
+        # Initializes the Service Usage client using your base Service Account credentials
+        client = service_usage_v1.ServiceUsageClient(credentials=self.base_creds)
+        
+        # The API expects the parent string formatted as 'projects/[PROJECT_ID_OR_NUMBER]'
+        parent = f"projects/{project_id}"
+        
+        # We use the filter "state:ENABLED" to only get active APIs
+        request = service_usage_v1.ListServicesRequest(
+            parent=parent,
+            filter="state:ENABLED"
+        )
+        
+        try:
+            # Paginates through the enabled services
+            services = client.list_services(request=request)
+            print(services) 
+            enabled_apis = []
+            for service in services:
+                # service.config.name returns the clean API string (e.g., 'compute.googleapis.com')
+                api_name = service.config.name
+                enabled_apis.append(api_name)
+                
+            return enabled_apis
+            
+        except Exception as e:
+            print(f"CRITICAL API ERROR: Failed to list APIs for {project_id}. {e}")
+            return None
+    def list_all_organizations(self):
+        """
+        Lists all GCP Organizations the service account has access to.
+        top level taxonomy
+        """
+        print("Fetching accessible GCP Organizations...")
+        
+        # Initializes the Organizations client using your base Service Account credentials
+        client = resourcemanager_v3.OrganizationsClient(credentials=self.base_creds)
+        
+        try:
+            # Searching without a query returns all accessible organizations
+            organizations = client.search_organizations()
+            
+            org_list = []
+            for org in organizations:
+                # org.name returns the string in the format "organizations/1234567890"
+                # org.display_name returns the human-readable name like "example.com"
+                org_id = org.name.split('/')[-1] 
+                #https://googleapis.dev/python/protobuf/latest/google/protobuf/timestamp_pb2.html
+                #print(f"Organization ID: {org_id} | Name: {org.display_name} {type(org).to_json(org)} {type(org).to_dict(org)} ")
+                #{org.create_time.ToJsonString()}
+                #https://developers.google.com/workspace/admin/directory/reference/rest/v1/groups/list?_gl=1*1qheou2*_up*MQ..*_ga*MTY3OTYyNDA1Ny4xNzg2NDg4MTQw*_ga_SM8HXJ53K2*czE3ODY0ODgxMzkkbzEkZzAkdDE3ODY0ODgxMzkkajYwJGwwJGgw
+                #https://docs.cloud.google.com/resource-manager/reference/rest/v3/organizations
+                #https://docs.cloud.google.com/python/docs/reference/cloudresourcemanager/latest/google.cloud.resourcemanager_v3.types.Organization
+
+                
+            
+            print(f"Total organizations returned: {len(org_list)}")
+            #return org_list
+            
+        except Exception as e:
+            print(f"CRITICAL API ERROR: Failed to list GCP organizations. {e}")
+            #return None
+        print(org) 
+        print({type(org).to_json(org)})
+        print(org.create_time.rfc3339()) 
+        print(type(org.create_time))   
+        org_list.append(org)
 
 class GoogleUser:
     def __init__(self,

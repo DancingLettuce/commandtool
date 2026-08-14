@@ -1,5 +1,5 @@
 
-"""This file is commandtool.py"""
+"""This filename is commandtool.py"""
 # call with py -m commandtool.commandtool from parent
 
 """
@@ -96,6 +96,11 @@ TOML_STRING="""# Auto-generated default configuration
     TRANSCRIBE_OWNER_EMAIL = ""
     TRANSCRIBE_FOLDER_ID = ""
     TRANSCRIBE_LECTURE_FOLDER_ID = ""
+    CLOUD_CMDB_DATABASE_NAME = ""
+    CLOUD_CMDB_DATABASE_HOST = ""
+    CLOUD_CMDB_DATABASE_USER = ""
+    CLOUD_CMDB_DATABASE_PASSWORD = ""
+    CLOUD_CMDB_DATABASE_DRIVER = ""
     """ 
 SCRIPT_DIR = Path(__file__).resolve().parent 
 #DEFAULT_CONFIG_PATH = SCRIPT_DIR / "secrets.toml" # for a local secrets or config file
@@ -109,7 +114,9 @@ ALLOWED_COMMANDS={
     'unsuspendmoveouresetpassword':"",'transcribe_lecture':"param1=folderid",
     'search_object':"",'moveou':"", "upload_file":"param1=folderid",
     "deprovision_user":"", "unsuspend_user":"", "suspend_user":"",
-    "delegate_account":"param1=mailbox param2=userwithaccess",}  
+    "delegate_account":"param1=mailbox param2=userwithaccess",
+    "listallprojects":"","listallorganisations":""}
+  
 ARGS, ARBITRARY_ARGS = init_argparse()
 import lib_helper_lib as helperlib 
 CONFIG = helperlib.init_secrets(toml_string=TOML_STRING,filename=ARGS.configfile) 
@@ -167,6 +174,13 @@ try:
 except Exception as e:
     import_lib_djangoapp = False
     print(f"WARNING: Can not import lib_djangoapp {e}")
+
+try:
+    import lib_sqlhandler 
+    import_lib_sqlhandler = True
+except Exception as e:
+    import_lib_sqlhandler = False
+    print(f"WARNING: Can not import lib_sqlhandler {e}")
 
 def upload_recent_file(folder_path: str,filetype: str='.mp3', days=7):
     file_to_copy= get_file(folder_path=folder_path, filetype=filetype, days=7)
@@ -504,6 +518,22 @@ def main():
                                             export_name=export_name) 
     elif args_command == 'test':
         if not import_lib_localtest:
+                    print("No local test, exiting")
+                    return
+        sqlh = lib_sqlhandler.SqlAService(
+            cloud_cmdb_database_name =CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+            cloud_cmdb_database_host = CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+            cloud_cmdb_database_user = CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+            cloud_cmdb_database_password = CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+            cloud_cmdb_database_driver = CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+        )
+        sqlh.execute_sql(lib_localtest.mysql)
+        
+
+        
+
+        """
+        if not import_lib_localtest:
             print("No local test, exiting")
             return
         transcribe_owner_email = CONFIG.get('TRANSCRIBE_OWNER_EMAIL',"")
@@ -513,12 +543,15 @@ def main():
                 drive_owner_email=transcribe_owner_email,
                 service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
                 )
+        print("created gh")
+        print(CONFIG.get('SERVICE_ACCOUNT_FILE',""))
         gh.create_document(
             parent_folder_id=CONFIG.get('TRANSCRIBE_FOLDER_ID',""),
             filename="myfile",
             body_text="mytext"
             )
         print("done")
+        """
     elif args_command == 'approve_deviceuser':
         approve_deviceuser(
                 delegated_email=CONFIG['ADMIN_EMAIL'],
@@ -688,6 +721,19 @@ def main():
                                         )
         gh.delegate_account(mastermailbox_email=args_param1, 
                             clientaccount_email=args_param2)
+    elif args_command == "listallprojects":
+        gh = lib_googlehandler.GoogleService(
+                                        delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                                        service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                                        )
+        gh.list_all_projects() 
+    elif args_command == "listallorganisations":
+        gh = lib_googlehandler.GoogleService(
+                                        delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                                        service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                                        )
+        gh.list_all_organizations()
+
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

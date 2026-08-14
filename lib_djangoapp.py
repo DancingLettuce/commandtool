@@ -1,8 +1,9 @@
+"""This is filename lib_djangoapp.py"""
 try:
     from gwa import models as gwa_models
     from cmi import models as cmi_models
 except Exception as e:
-    print(f"WARNING lib_djangoapp{e}")
+    print(f"WARNING lib_djangoapp {e}")
 
 class ConfigurationItemDummy:
     description="Configuration Item Not Found"
