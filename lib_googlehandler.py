@@ -41,6 +41,8 @@ import lib_helper_lib as helperlib
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from itertools import batched
+from sqlalchemy import insert
 import lib_sqlhandler
 import sqlhandler_models as models
 
@@ -756,7 +758,8 @@ class GoogleService():
         top level taxonomy
         """
         print("Fetching accessible GCP Organizations...")
-        engine = create_engine(sqlh.db_url)
+        #engine = create_engine(sqlh.db_url)
+        engine = sqlh.engine
 
         # Initializes the Organizations client using your base Service Account credentials
         client = resourcemanager_v3.OrganizationsClient(credentials=self.base_creds)
@@ -765,21 +768,40 @@ class GoogleService():
             # Searching without a query returns all accessible organizations
             organizations = client.search_organizations()
             
-            org_list = []
             with Session(engine) as session:
-                for org in organizations:
+                c = 0
+                # itertools.batched
+                for chunk in batched(organizations, 5000):
                     # org.name returns the string in the format "organizations/1234567890"
                     # org.display_name returns the human-readable name like "example.com"
                     #org_id = org.name.split('/')[-1] 
                     #https://googleapis.dev/python/protobuf/latest/google/protobuf/timestamp_pb2.html
                     #print(f"Organization ID: {org_id} | Name: {org.display_name} {type(org).to_json(org)} {type(org).to_dict(org)} ")
                     #{org.create_time.ToJsonString()}
-                    #https://developers.google.com/workspace/admin/directory/reference/rest/v1/groups/list?_gl=1*1qheou2*_up*MQ..*_ga*MTY3OTYyNDA1Ny4xNzg2NDg4MTQw*_ga_SM8HXJ53K2*czE3ODY0ODgxMzkkbzEkZzAkdDE3ODY0ODgxMzkkajYwJGwwJGgw
+                    #https://developers.google.com/workspace/admin/directory/reference/rest/v1/groups/
                     #https://docs.cloud.google.com/resource-manager/reference/rest/v3/organizations
                     #https://docs.cloud.google.com/python/docs/reference/cloudresourcemanager/latest/google.cloud.resourcemanager_v3.types.Organization
-                    org_dict = type(org).to_dict(org)
-                    org_id = org.name.split('/')[-1]
-                    org_name = org.name
+                    batch_dicts = []
+                    for org in chunk:
+                        org_dict = type(org).to_dict(org)
+                        org_id = org.name.split('/')[-1]
+                        batch_dicts.append({
+                            "api_lastseen": datetime.now(timezone.utc),
+                            "name": org.name,
+                            "organisation_id": org_id,
+                            "display_name": org.display_name,
+                            "directory_customer_id": org.directory_customer_id,
+                            "state": org.state.name,
+                            "create_time": org.create_time,
+                            "update_time": org.update_time,
+                            "etag": org.etag,
+                            "api_data": org_dict
+                        })
+                    session.execute(insert(models.CcmOrganisationStaging), batch_dicts)
+                    session.commit()
+                    c += len(batch_dicts)
+                    print(f"Inserted batch of {len(batch_dicts)} rows. Total so far: {c}")
+                    """    
                     statement = select(models.CcmOrganisation).where(models.CcmOrganisation.name == org_name)
                     existing_org = session.scalars(statement).one_or_none()
                     if existing_org:
@@ -807,6 +829,7 @@ class GoogleService():
                         )
                         session.add(new_org_record)
                         print(f"Inserted new org: {org_name}")
+                    """ 
                     """# 3. Create the Python object mapping to your table
                     new_org_record = models.CcmOrganisation(
                         api_lastseen=datetime.now(timezone.utc), 

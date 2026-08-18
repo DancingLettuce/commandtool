@@ -94,4 +94,19 @@ class CcmProject(Base):
     display_name: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
     create_time: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
     etag: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
-    
+
+class CcmProjectStaging(Base):
+    __tablename__ = "ccm_project_staging"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_on: Mapped[Optional[datetime]] = mapped_column(
+        DATETIMEOFFSET, server_default=text("getdate()")
+    )
+    api_lastseen: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
+    api_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    name: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    parent: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    project_id: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    state: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    display_name: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    create_time: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
+    etag: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
