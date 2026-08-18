@@ -122,9 +122,9 @@ class CcmGoogleApi(Base):
     name: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
     title: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
     summary: Mapped[Optional[str]] = mapped_column(String(5000), server_default="")
-
+ 
 class CcmGoogleProjectApi(Base):
-    __tablename__ = "ccm_googleapi"
+    __tablename__ = "ccm_googleprojectapi"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     created_on: Mapped[Optional[datetime]] = mapped_column(
         DATETIMEOFFSET, server_default=text("getdate()")

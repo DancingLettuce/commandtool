@@ -12,6 +12,7 @@ import tomli
 import urllib.parse
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 import sqlhandler_models 
 
 myvar = textwrap.dedent("""\
@@ -36,7 +37,7 @@ class SqlAService():
                   f"{self.cloud_cmdb_database_host}/{self.cloud_cmdb_database_name}?"
                   f"driver={self.cloud_cmdb_database_driver}")
         return db_url
-
+ 
     @property 
     def engine(self):
         return create_engine(self.db_url, fast_executemany=True)
@@ -91,6 +92,25 @@ class SqlAService():
             # 2. Commit the transaction
             session.commit()
             print(f"Table {tablename} truncated.")
+
+
+
+    def get_all_google_api_names(self) -> set[str]:
+        """
+        Fetches all 'name' values from the ccm_googleapi table into a set for efficient lookups.
+        
+        Returns:
+            A set containing all API names from the database.
+        """
+        engine = self.engine
+        with Session(engine) as session:
+            statement = select(sqlhandler_models.CcmGoogleApi.name)
+            # .scalars() fetches the first column of each row.
+            # .all() gets all results into a list.
+            # We convert to a set for O(1) average time complexity for lookups.
+            api_names_list = session.execute(statement).scalars().all()
+            return set(api_names_list)
+
 
     """
     bulk data insert

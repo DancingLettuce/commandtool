@@ -737,7 +737,7 @@ def main():
         else:
             print(f"Invalid args_param1 {args_param1}")
         gh.list_all_projects(query=query, sqlh=sqlh) 
-
+ 
          
     elif args_command == "listallorganisations":
         sqlh = lib_sqlhandler.SqlAService(
@@ -768,11 +768,20 @@ def main():
                                         )
         gh.list_all_folders(sqlh=sqlh)
     elif args_command == "listapis":
+        """Pass the proect_id as args_param1"""
+        sqlh = lib_sqlhandler.SqlAService(
+            cloud_cmdb_database_name=CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+            cloud_cmdb_database_host=CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+            cloud_cmdb_database_user=CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+            cloud_cmdb_database_password=CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+            cloud_cmdb_database_driver=CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+        )
+        existing_api_names = sqlh.get_all_google_api_names()
         gh = lib_googlehandler.GoogleService(
                 delegated_email=CONFIG.get('ADMIN_EMAIL',""),
                 service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
                 )
-        gh.list_enabled_apis(project_id=args_param1)
+        gh.list_enabled_apis(project_id=args_param1,sqlh=sqlh,existing_api_names=existing_api_names)
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

@@ -45,6 +45,7 @@ from sqlalchemy import select
 from lib_helper_lib import batched
 from sqlalchemy import insert
 import lib_sqlhandler
+from sqlalchemy import delete
 import sqlhandler_models as models
 
 
@@ -699,6 +700,9 @@ class GoogleService():
                             "etag": chunki.etag,
                             "api_data": type(chunki).to_dict(chunki)
                         })
+                        if query:
+                            self.list_enabled_apis(project_id=chunki.project_id, sqlh=sqlh)
+
                     session.execute(insert(models.CcmProjectStaging), batch_dicts)
                     session.commit()
                     c += len(batch_dicts)
@@ -735,7 +739,7 @@ class GoogleService():
                         Source.project_id, Source.state, Source.display_name, Source.create_time, Source.etag
                     )
                 """
-        if query:
+        if query: 
             sql += " ; "
         else: 
             sql += """
@@ -745,13 +749,22 @@ class GoogleService():
                     DELETE;
             """
         sqlh.execute_sql(sql)
-    def list_enabled_apis(self, project_id: str, sqlh:lib_sqlhandler.SqlAService = None):
+        sql = """
+            UPDATE gpa
+            SET gpa.project_ccm_id = p.id
+            FROM ccm_googleprojectapi AS gpa
+            INNER JOIN ccm_project AS p ON gpa.parent = p.name;
+        """
+        sqlh.execute_sql(sql)
+def list_enabled_apis(self, project_id: str, 
+                          sqlh:lib_sqlhandler.SqlAService = None, 
+                          existing_api_names:list = None):
         """
         Lists all enabled APIs for a given project ID or Number.
         Returns a list of API names (e.g., ['compute.googleapis.com', 'storage-api.googleapis.com'])
         """
         print(f"Fetching enabled APIs for project: {project_id}...")
-        
+        existing_api_names = sqlh.get_all_google_api_names()
         # Initializes the Service Usage client using your base Service Account credentials
         client = service_usage_v1.ServiceUsageClient(credentials=self.base_creds)
         
@@ -764,25 +777,91 @@ class GoogleService():
             filter="state:ENABLED"
         )
         
-        try:
-            # Paginates through the enabled services
-            services = client.list_services(request=request)
-            print(services) 
-            enabled_apis = []
-            for service in services:
-                # service.config.name returns the clean API string (e.g., 'compute.googleapis.com')
-                api_name = service.config.name
-                enabled_apis.append(api_name)
+        project_apis_to_insert = []
+        new_apis_to_insert = []
+        enabled_apis_count = 0
+
+        try: # Using a single session for all checks in the loop
+            with Session(sqlh.engine) as session:
+                # 1. DELETE existing records for this project to ensure a clean slate.
+                print(f"Deleting existing API entries for project '{parent}'...")
+                delete_statement = delete(models.CcmGoogleProjectApi).where(models.CcmGoogleProjectApi.parent == parent)
+                result = session.execute(delete_statement)
+                session.commit()
+                print(f"Deleted {result.rowcount} old records.")
+
+                # 2. COLLECT all enabled APIs from the Google API call.
+                services = client.list_services(request=request)
+                for service in services:
+                    enabled_apis_count += 1
+                    project_apis_to_insert.append({
+                        "name": service.name, # e.g., projects/123/services/compute.googleapis.com
+                        "state": service.state.name,
+                        "parent": service.parent, # e.g., projects/123
+                        "api_lastseen": datetime.now(timezone.utc),
+                        "api_data": type(service).to_dict(service)
+                    })
+                    api_name = service.config.name
+                    """
+                    exists_statement = select(models.CcmGoogleApi.id).where(models.CcmGoogleApi.name == api_name).limit(1)
+                    # 2. Execute it. .scalar() returns the single boolean result (True or False).
+                    api_already_exists = session.scalar(exists_statement)
+                    """
+                    api_already_exists = api_name in existing_api_names 
+                    # 3. Check the result before appending
+                    if api_already_exists:
+                        print(f"  - Skipping '{api_name}' (already in DB).")
+                    else:
+                        print(f"  + Adding new API '{api_name}' to insert list.")
+                        # Safely get the summary. If .documentation or .summary doesn't exist,
+                        # an AttributeError is caught and we default to an empty string.
+                        try:
+                            summary = service.config.documentation.summary
+                        except AttributeError:
+                            summary = ""
+
+                        new_apis_to_insert.append({
+                            "name": api_name,
+                            "title": service.config.title,
+                            "summary": summary,
+                            "api_lastseen": datetime.now(timezone.utc),
+                            "api_data": type(service).to_dict(service)
+                        })
+                        
                 
-            return enabled_apis
-            
+                print(f"\nProcessed {enabled_apis_count} enabled APIs for project {project_id}.")
+
+                # 3. BULK INSERT all collected APIs into the linking table.
+                if project_apis_to_insert:
+                    print(f"Bulk inserting {len(project_apis_to_insert)} project-api links...")
+                    session.execute(insert(models.CcmGoogleProjectApi), project_apis_to_insert)
+                    print("Bulk insert complete.")
+                else:
+                    print("No enabled APIs found to insert.")
+                if new_apis_to_insert:
+                    print(f"Bulk inserting {len(new_apis_to_insert)} new APIs into the database...")
+                    session.execute(insert(models.CcmGoogleApi), new_apis_to_insert)
+                session.commit()
+
+            # 4. UPDATE FOREIGN KEY: Execute raw SQL to link to the ccm_project table.
+            print("Updating foreign key references to ccm_project table...")
+            update_sql = f"""
+                UPDATE gpa
+                SET gpa.project_ccm_id = p.id
+                FROM ccm_googleprojectapi AS gpa
+                INNER JOIN ccm_project AS p ON gpa.parent = p.name
+                WHERE gpa.parent = '{parent}';
+            """
+            sqlh.execute_sql(update_sql)
+            print("Foreign key update complete.")
+
         except Exception as e:
             print(f"CRITICAL API ERROR: Failed to list APIs for {project_id}. {e}")
             return None
+        
     def list_all_organizations(self, sqlh:lib_sqlhandler.SqlAService = None):
         """
-        Lists all GCP Organizations the service account has access to.
-        top level taxonomy
+        Lists all accessible GCP Organizations.
         """
         print("Fetching accessible GCP Organizations...")
         #engine = create_engine(sqlh.db_url)
