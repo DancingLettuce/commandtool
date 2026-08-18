@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 from functools import cached_property
+from datetime import datetime, timezone
+
 import io 
 import os
 import shutil
@@ -35,7 +37,14 @@ except Exception as e:
      imports_google = False
 
 import lib_helper_lib as helperlib 
- 
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+import lib_sqlhandler
+import sqlhandler_models as models
+
+
 @dataclass
 class GoogleService():
     delegated_email: str=""
@@ -654,10 +663,11 @@ class GoogleService():
         print(f"Deprovisioning steps complete for {account_email}.")
 
     # Google Compute Platform
-    def list_all_projects(self, query: str = "NOT id:sys-* AND NOT id:app-*"):
+    def list_all_projects(self, query: str = "NOT id:sys-* AND NOT id:app-*", sqlh:lib_sqlhandler.SqlAService = None):
         #Google Cloud's Resource Manager API utilizes the AIP-160 filtering standard 
         print(f"Fetching accessible Google Cloud Projects Query={query}")
-        
+        engine = create_engine(sqlh.db_url)
+
         # Initializes the Resource Manager client using your base Service Account credentials
         client = resourcemanager_v3.ProjectsClient(credentials=self.base_creds)
         pcount=0
@@ -667,13 +677,41 @@ class GoogleService():
             projects = client.search_projects(query=query)
             
             project_list = []
-            for project in projects:
-                pcount += 1
-                print(f"{pcount} Project ID: {project.project_id} | Name: {project.display_name} ")
-                self.list_enabled_apis(project_id=project.project_id)
-                project_list.append(project)
-                
-            return project_list
+            with Session(engine) as session:
+                for project in projects:
+                    pcount += 1
+                    #print(f"{pcount} Project ID: {project.project_id} | Name: {project.display_name} ")
+                    project_list.append(project)
+                    #print(type(project).to_json(project))
+                    statement = select(models.CcmProject).where(models.CcmProject.project_id == project.project_id)
+                    existing_item= session.scalars(statement).one_or_none()
+                    if existing_item:
+                        existing_item.api_lastseen = datetime.now(timezone.utc)
+                        existing_item.api_data = type(project).to_dict(project)
+                        existing_item.name = project.name
+                        existing_item.parent = project.parent
+                        existing_item.display_name = project.displayName
+                        existing_item.state = project.state.name
+                        existing_item.etag = project.etag
+                        # (Notice we intentionally do NOT update created_time or )
+                        print(f"{pcount} Updated existing org: {project.project_id}")
+                    else:
+                        # 3. INSERT: It does not exist. Create it and add to session.
+                        new_org_record = models.CcmProject(
+                            api_lastseen=datetime.now(timezone.utc), 
+                            api_data=type(project).to_dict(project),
+                            name=project.name,
+                            parent=project.parent,
+                            project_id = project.project_id,
+                            display_name = project.display_name,
+                            state = project.state.name,
+                            etag = project.etag,
+                            create_time=project.create_time,
+                        )
+                        session.add(new_org_record)
+                        print(f"{pcount} Inserted new org: {project.project_id}")
+                    
+                return project_list
             
         except Exception as e:
             print(f"CRITICAL API ERROR: Failed to list GCP projects. {e}")
@@ -712,13 +750,14 @@ class GoogleService():
         except Exception as e:
             print(f"CRITICAL API ERROR: Failed to list APIs for {project_id}. {e}")
             return None
-    def list_all_organizations(self):
+    def list_all_organizations(self, sqlh:lib_sqlhandler.SqlAService = None):
         """
         Lists all GCP Organizations the service account has access to.
         top level taxonomy
         """
         print("Fetching accessible GCP Organizations...")
-        
+        engine = create_engine(sqlh.db_url)
+
         # Initializes the Organizations client using your base Service Account credentials
         client = resourcemanager_v3.OrganizationsClient(credentials=self.base_creds)
         
@@ -727,31 +766,197 @@ class GoogleService():
             organizations = client.search_organizations()
             
             org_list = []
-            for org in organizations:
-                # org.name returns the string in the format "organizations/1234567890"
-                # org.display_name returns the human-readable name like "example.com"
-                org_id = org.name.split('/')[-1] 
-                #https://googleapis.dev/python/protobuf/latest/google/protobuf/timestamp_pb2.html
-                #print(f"Organization ID: {org_id} | Name: {org.display_name} {type(org).to_json(org)} {type(org).to_dict(org)} ")
-                #{org.create_time.ToJsonString()}
-                #https://developers.google.com/workspace/admin/directory/reference/rest/v1/groups/list?_gl=1*1qheou2*_up*MQ..*_ga*MTY3OTYyNDA1Ny4xNzg2NDg4MTQw*_ga_SM8HXJ53K2*czE3ODY0ODgxMzkkbzEkZzAkdDE3ODY0ODgxMzkkajYwJGwwJGgw
-                #https://docs.cloud.google.com/resource-manager/reference/rest/v3/organizations
-                #https://docs.cloud.google.com/python/docs/reference/cloudresourcemanager/latest/google.cloud.resourcemanager_v3.types.Organization
-
-                
-            
+            with Session(engine) as session:
+                for org in organizations:
+                    # org.name returns the string in the format "organizations/1234567890"
+                    # org.display_name returns the human-readable name like "example.com"
+                    #org_id = org.name.split('/')[-1] 
+                    #https://googleapis.dev/python/protobuf/latest/google/protobuf/timestamp_pb2.html
+                    #print(f"Organization ID: {org_id} | Name: {org.display_name} {type(org).to_json(org)} {type(org).to_dict(org)} ")
+                    #{org.create_time.ToJsonString()}
+                    #https://developers.google.com/workspace/admin/directory/reference/rest/v1/groups/list?_gl=1*1qheou2*_up*MQ..*_ga*MTY3OTYyNDA1Ny4xNzg2NDg4MTQw*_ga_SM8HXJ53K2*czE3ODY0ODgxMzkkbzEkZzAkdDE3ODY0ODgxMzkkajYwJGwwJGgw
+                    #https://docs.cloud.google.com/resource-manager/reference/rest/v3/organizations
+                    #https://docs.cloud.google.com/python/docs/reference/cloudresourcemanager/latest/google.cloud.resourcemanager_v3.types.Organization
+                    org_dict = type(org).to_dict(org)
+                    org_id = org.name.split('/')[-1]
+                    org_name = org.name
+                    statement = select(models.CcmOrganisation).where(models.CcmOrganisation.name == org_name)
+                    existing_org = session.scalars(statement).one_or_none()
+                    if existing_org:
+                        existing_org.api_lastseen = datetime.now(timezone.utc)
+                        existing_org.display_name = org.display_name
+                        existing_org.state = org.state.name
+                        existing_org.update_time = org.update_time
+                        existing_org.etag = org.etag
+                        existing_org.api_data = org_dict
+                        # (Notice we intentionally do NOT update created_time or directory_customer_id)
+                        print(f"Updated existing org: {org_name}")
+                    else:
+                        # 3. INSERT: It does not exist. Create it and add to session.
+                        new_org_record = models.CcmOrganisation(
+                            api_lastseen=datetime.now(timezone.utc), 
+                            name=org_name,
+                            organisation_id=org_id,
+                            display_name=org.display_name,
+                            directory_customer_id=org.directory_customer_id,
+                            state=org.state.name, 
+                            create_time=org.create_time, 
+                            update_time=org.update_time, 
+                            etag=org.etag,
+                            api_data=org_dict 
+                        )
+                        session.add(new_org_record)
+                        print(f"Inserted new org: {org_name}")
+                    """# 3. Create the Python object mapping to your table
+                    new_org_record = models.CcmOrganisation(
+                        api_lastseen=datetime.now(timezone.utc), 
+                        name=org.name,
+                        organisation_id=org_id,
+                        display_name=org.display_name,
+                        directory_customer_id=org.directory_customer_id,
+                        state=org.state.name, 
+                        create_time=org.create_time, 
+                        update_time=org.update_time, 
+                        etag=org.etag,
+                        api_data=org_dict 
+                    )
+                    # 4. Add it to the session workspace (this does NOT hit the DB yet)
+                    session.add(new_org_record)"""
+                    org_list.append(org)
+                session.commit() 
             print(f"Total organizations returned: {len(org_list)}")
             #return org_list
             
         except Exception as e:
             print(f"CRITICAL API ERROR: Failed to list GCP organizations. {e}")
             #return None
-        print(org) 
-        print({type(org).to_json(org)})
-        print(org.create_time.rfc3339()) 
-        print(type(org.create_time))   
-        org_list.append(org)
+        
+    def list_all_folders(self, sqlh:lib_sqlhandler.SqlAService = None):
+        """
+        Lists all GCP Folders the service account has access to.
+        Sits between Organizations and Projects in the taxonomy.
+        """
+        print("Fetching accessible GCP Folders...")
+        
+        if not sqlh:
+            print("CRITICAL ERROR: No SQL handler provided.")
+            return
 
+        engine = create_engine(sqlh.db_url)
+
+        # Initialize the Folders client using your base Service Account credentials
+        client = resourcemanager_v3.FoldersClient(credentials=self.base_creds)
+        
+        try:
+            # Searching without a query returns all accessible folders across the org
+            folders = client.search_folders()
+            
+            folder_list = []
+            with Session(engine) as session:
+                c = 0
+                for folder in folders:
+                    c += 1
+                    # folder.name returns "folders/1234567890"
+                    # folder.parent returns the parent resource, e.g., "organizations/123" or "folders/456"
+                    folder_dict = type(folder).to_dict(folder)
+                    folder_id = folder.name.split('/')[-1]
+                    folder_name = folder.name
+                    
+                    # Look for existing folder to UPSERT
+                    statement = select(models.CcmFolder).where(models.CcmFolder.name == folder_name)
+                    existing_folder = session.scalars(statement).one_or_none()
+                    
+                    if existing_folder:
+                        existing_folder.api_lastseen = datetime.now(timezone.utc)
+                        existing_folder.display_name = folder.display_name
+                        existing_folder.parent = folder.parent
+                        existing_folder.state = folder.state.name
+                        existing_folder.update_time = folder.update_time
+                        existing_folder.etag = folder.etag
+                        existing_folder.api_data = folder_dict
+                        print(f"{c} Updated existing folder: {folder_name}")
+                    else:
+                        # INSERT: It does not exist. Create it and add to session.
+                        new_folder_record = models.CcmFolder(
+                            api_lastseen=datetime.now(timezone.utc), 
+                            name=folder_name,
+                            folder_id=folder_id,
+                            display_name=folder.display_name,
+                            parent=folder.parent,
+                            state=folder.state.name, 
+                            create_time=folder.create_time, 
+                            update_time=folder.update_time, 
+                            etag=folder.etag,
+                            api_data=folder_dict 
+                        )
+                        session.add(new_folder_record)
+                        print(f"{c} Inserted new folder: {folder_name}")
+                        
+                    folder_list.append(folder)
+                
+                # Commit all updates and inserts in one transaction
+                session.commit() 
+                
+            print(f"Total folders returned: {len(folder_list)}")
+            # update the ccm_organisation_id
+            sql ="""WITH FolderTree AS (
+                -- 1. Base Case: Find all folders that are directly under an Organization
+                SELECT 
+                    id AS folder_ccm_id,
+                    name AS folder_name,
+                    parent AS root_org_name -- e.g., 'organizations/123456789'
+                FROM ccm_folder
+                WHERE parent LIKE 'organizations/%'
+                UNION ALL
+                -- 2. Recursive Step: Find all child folders and inherit the root_org_name from their parent
+                SELECT 
+                    child.id AS folder_ccm_id,
+                    child.name AS folder_name,
+                    tree.root_org_name
+                FROM ccm_folder child
+                INNER JOIN FolderTree tree 
+                    ON child.parent = tree.folder_name
+            )
+            -- 3. The Update Statement: Join the resolved tree to the organisation table to get the PK
+            UPDATE f
+            SET f.organisation_ccm_id = o.id
+            FROM ccm_folder f
+            INNER JOIN FolderTree ft 
+                ON f.id = ft.folder_ccm_id
+            INNER JOIN ccm_organisation o 
+                ON ft.root_org_name = o.name;"""
+            sqlh.execute_sql(sql) 
+            return folder_list
+            
+        except Exception as e:
+            print(f"CRITICAL API ERROR: Failed to list GCP folders. {e}")
+            return None
+    """Recursive CTE Common Table Expression
+        WITH FolderTree AS (
+        -- Base Case: Find all top-level folders (where the parent is an organization)
+        SELECT 
+            name AS folder_name,
+            display_name,
+            parent AS current_parent,
+            parent AS root_organization -- This is the ultimate org!
+        FROM ccm_folder
+        WHERE parent LIKE 'organizations/%'
+
+        UNION ALL
+
+        -- Recursive Step: Find all sub-folders and inherit the root_organization from the parent
+        SELECT 
+            child.name,
+            child.display_name,
+            child.parent,
+            tree.root_organization -- Passes the org down to the children
+        FROM ccm_folder child
+        INNER JOIN FolderTree tree 
+            ON child.parent = tree.folder_name
+    )
+    -- See the final flat list!
+    SELECT folder_name, display_name, root_organization 
+    FROM FolderTree;"""
 class GoogleUser:
     def __init__(self,
                  email=None,

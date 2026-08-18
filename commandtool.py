@@ -115,7 +115,7 @@ ALLOWED_COMMANDS={
     'search_object':"",'moveou':"", "upload_file":"param1=folderid",
     "deprovision_user":"", "unsuspend_user":"", "suspend_user":"",
     "delegate_account":"param1=mailbox param2=userwithaccess",
-    "listallprojects":"","listallorganisations":""}
+    "listallprojects":"all | quick","listallorganisations":"","listallfolders":""}
   
 ARGS, ARBITRARY_ARGS = init_argparse()
 import lib_helper_lib as helperlib 
@@ -528,10 +528,6 @@ def main():
             cloud_cmdb_database_driver = CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
         )
         sqlh.execute_sql(lib_localtest.mysql)
-        
-
-        
-
         """
         if not import_lib_localtest:
             print("No local test, exiting")
@@ -726,14 +722,50 @@ def main():
                                         delegated_email=CONFIG.get('ADMIN_EMAIL',""),
                                         service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
                                         )
-        gh.list_all_projects() 
+        sqlh = lib_sqlhandler.SqlAService(
+                            cloud_cmdb_database_name =CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+                            cloud_cmdb_database_host = CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+                            cloud_cmdb_database_user = CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+                            cloud_cmdb_database_password = CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+                            cloud_cmdb_database_driver = CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+                        )
+        if not args_param1 or args_param1=="all":
+            query=""
+        elif args_param1 == 'quick': 
+            query="NOT id:sys-* AND NOT id:app-*"
+        else:
+            print(f"Invalid args_param1 {args_param1}")
+        gh.list_all_projects(query=query, sqlh=sqlh) 
+
+         
     elif args_command == "listallorganisations":
+        sqlh = lib_sqlhandler.SqlAService(
+                    cloud_cmdb_database_name =CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+                    cloud_cmdb_database_host = CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+                    cloud_cmdb_database_user = CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+                    cloud_cmdb_database_password = CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+                    cloud_cmdb_database_driver = CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+                )
+        ##sqlh.truncate_table('ccm_organisation')
         gh = lib_googlehandler.GoogleService(
                                         delegated_email=CONFIG.get('ADMIN_EMAIL',""),
                                         service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
                                         )
-        gh.list_all_organizations()
-
+        gh.list_all_organizations(sqlh=sqlh)
+    elif args_command == "listallfolders":
+        sqlh = lib_sqlhandler.SqlAService(
+                    cloud_cmdb_database_name =CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+                    cloud_cmdb_database_host = CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+                    cloud_cmdb_database_user = CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+                    cloud_cmdb_database_password = CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+                    cloud_cmdb_database_driver = CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+                )
+        ##sqlh.truncate_table('ccm_folder')
+        gh = lib_googlehandler.GoogleService(
+                                        delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                                        service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                                        )
+        gh.list_all_folders(sqlh=sqlh)
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

@@ -3,17 +3,23 @@
 #pip install sqlalchemy alembic pyodbc tomli
 # check driver installed with cat /etc/odbcinst.ini
 
+
+
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import textwrap
 import tomli
 import urllib.parse
 from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+import sqlhandler_models 
 
 myvar = textwrap.dedent("""\
         This is a long multi-line string inside a function.
         The backslash after the opening quotes prevents an 
         initial blank line, and dedent removes leading indentation.
     """)
+
 
 @dataclass
 class SqlAService():
@@ -57,14 +63,25 @@ class SqlAService():
                 print(f"ID: {row.id} | Field: {row.my_field}")
         """
         engine = create_engine(self.db_url)
-        with engine.connect() as connection:
+        """with engine.connect() as connection:
             # Wrap your raw SQL string in the text() function
             result = connection.execute(text(sql))
-             
-            # Dump the results to the CLI
-            print(f"Found {result.rowcount} rows:")
-            for row in result:
-                # row._mapping converts the row to a dictionary-like object so you can see column names
-                print(dict(row._mapping))
+            connection.commit()
+        """  
+        with engine.begin() as connection:
+            result = connection.execute(text(sql)) 
+            print(f"Affected {result.rowcount} rows.")
+            # Check if the query actually returned data (like a SELECT) before looping
+            if result.returns_rows:
+                for row in result:
+                    print(dict(row._mapping))
 
-    
+            
+    def truncate_table(self, tablename:str):
+        engine = create_engine(self.db_url)
+        with Session(engine) as session:
+            # 1. Execute the raw TRUNCATE statement using your table name
+            session.execute(text(f"TRUNCATE TABLE {tablename};"))
+            # 2. Commit the transaction
+            session.commit()
+            print(f"Table {tablename} truncated.")
