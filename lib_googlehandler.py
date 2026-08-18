@@ -41,7 +41,8 @@ import lib_helper_lib as helperlib
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from itertools import batched
+# Instead of: from itertools import batched
+from lib_helper_lib import batched
 from sqlalchemy import insert
 import lib_sqlhandler
 import sqlhandler_models as models
@@ -668,57 +669,83 @@ class GoogleService():
     def list_all_projects(self, query: str = "NOT id:sys-* AND NOT id:app-*", sqlh:lib_sqlhandler.SqlAService = None):
         #Google Cloud's Resource Manager API utilizes the AIP-160 filtering standard 
         print(f"Fetching accessible Google Cloud Projects Query={query}")
-        engine = create_engine(sqlh.db_url)
-
+        engine = sqlh.engine
+        sqlh.truncate_table("ccm_project_staging")
         # Initializes the Resource Manager client using your base Service Account credentials
         client = resourcemanager_v3.ProjectsClient(credentials=self.base_creds)
-        pcount=0
-
+        
         try:
             # Searching without a query returns all accessible projects
             projects = client.search_projects(query=query)
-            
-            project_list = []
+        
             with Session(engine) as session:
-                for project in projects:
-                    pcount += 1
-                    #print(f"{pcount} Project ID: {project.project_id} | Name: {project.display_name} ")
-                    project_list.append(project)
-                    #print(type(project).to_json(project))
-                    statement = select(models.CcmProject).where(models.CcmProject.project_id == project.project_id)
-                    existing_item= session.scalars(statement).one_or_none()
-                    if existing_item:
-                        existing_item.api_lastseen = datetime.now(timezone.utc)
-                        existing_item.api_data = type(project).to_dict(project)
-                        existing_item.name = project.name
-                        existing_item.parent = project.parent
-                        existing_item.display_name = project.displayName
-                        existing_item.state = project.state.name
-                        existing_item.etag = project.etag
-                        # (Notice we intentionally do NOT update created_time or )
-                        print(f"{pcount} Updated existing org: {project.project_id}")
-                    else:
-                        # 3. INSERT: It does not exist. Create it and add to session.
-                        new_org_record = models.CcmProject(
-                            api_lastseen=datetime.now(timezone.utc), 
-                            api_data=type(project).to_dict(project),
-                            name=project.name,
-                            parent=project.parent,
-                            project_id = project.project_id,
-                            display_name = project.display_name,
-                            state = project.state.name,
-                            etag = project.etag,
-                            create_time=project.create_time,
-                        )
-                        session.add(new_org_record)
-                        print(f"{pcount} Inserted new org: {project.project_id}")
-                    
-                return project_list
+                c = 0
+                batch_size=5000
+                c_records = 0
+                for chunk in batched(projects, batch_size):
+                    batch_dicts = []
+                    for chunki in chunk:
+                        c_records +=1
+                        if c_records % 500 == 0:
+                            helperlib.print_flush(f"Appending record {c_records} with batch size {batch_size}. Done {c} batches")
+                        batch_dicts.append({
+                            "project_id": chunki.project_id,
+                            "api_lastseen": datetime.now(timezone.utc),
+                            "name": chunki.name,
+                            "parent": chunki.parent,
+                            "display_name": chunki.display_name,
+                            "state": chunki.state.name,
+                            "create_time": chunki.create_time,
+                            "etag": chunki.etag,
+                            "api_data": type(chunki).to_dict(chunki)
+                        })
+                    session.execute(insert(models.CcmProjectStaging), batch_dicts)
+                    session.commit()
+                    c += len(batch_dicts)
+                    print(f"Inserted batch of {len(batch_dicts)} rows. Total so far: {c}")
+            print(f"DONE. {c_records} Total records")
             
         except Exception as e:
             print(f"CRITICAL API ERROR: Failed to list GCP projects. {e}")
             return None
-    def list_enabled_apis(self, project_id: str):
+        sql = """MERGE INTO ccm_project AS Target
+                USING ccm_project_staging AS Source
+                ON Target.name = Source.name
+
+                -- 1. If it exists in both tables, UPDATE the working table
+                WHEN MATCHED THEN
+                    UPDATE SET 
+                        Target.api_lastseen = Source.api_lastseen,
+                        Target.api_data = Source.api_data,
+                        Target.parent = Source.parent,
+                        Target.project_id = Source.project_id,
+                        Target.state = Source.state,
+                        Target.display_name = Source.display_name,
+                        Target.create_time = Source.create_time,
+                        Target.etag = Source.etag
+
+                -- 2. If it is in Staging but NOT in Working, INSERT it
+                WHEN NOT MATCHED BY TARGET THEN
+                    INSERT (
+                        api_lastseen, api_data, name, parent, 
+                        project_id, state, display_name, create_time, etag
+                    )
+                    VALUES (
+                        Source.api_lastseen, Source.api_data, Source.name, Source.parent, 
+                        Source.project_id, Source.state, Source.display_name, Source.create_time, Source.etag
+                    )
+                """
+        if query:
+            sql += " ; "
+        else: 
+            sql += """
+                -- 3. If it is in Working but NOT in Staging, DELETE it
+                -- (If you are doing a "partial stage", simply comment out or remove these next two lines!)
+                WHEN NOT MATCHED BY SOURCE THEN
+                    DELETE;
+            """
+        sqlh.execute_sql(sql)
+    def list_enabled_apis(self, project_id: str, sqlh:lib_sqlhandler.SqlAService = None):
         """
         Lists all enabled APIs for a given project ID or Number.
         Returns a list of API names (e.g., ['compute.googleapis.com', 'storage-api.googleapis.com'])
@@ -771,7 +798,9 @@ class GoogleService():
             with Session(engine) as session:
                 c = 0
                 # itertools.batched
-                for chunk in batched(organizations, 5000):
+                batch_size=5000
+                c_total = 0
+                for chunk in batched(organizations, batch_size):
                     # org.name returns the string in the format "organizations/1234567890"
                     # org.display_name returns the human-readable name like "example.com"
                     #org_id = org.name.split('/')[-1] 
@@ -782,7 +811,11 @@ class GoogleService():
                     #https://docs.cloud.google.com/resource-manager/reference/rest/v3/organizations
                     #https://docs.cloud.google.com/python/docs/reference/cloudresourcemanager/latest/google.cloud.resourcemanager_v3.types.Organization
                     batch_dicts = []
+                    
                     for org in chunk:
+                        c_total +=1
+                        if c_total % 500 == 0:
+                            helperlib.print_flush(f"Appending item {c_total} with batch size {batch_size}. Done {c} batches")
                         org_dict = type(org).to_dict(org)
                         org_id = org.name.split('/')[-1]
                         batch_dicts.append({
@@ -797,7 +830,7 @@ class GoogleService():
                             "etag": org.etag,
                             "api_data": org_dict
                         })
-                    session.execute(insert(models.CcmOrganisationStaging), batch_dicts)
+                    session.execute(insert(models.CcmOrganisation), batch_dicts)
                     session.commit()
                     c += len(batch_dicts)
                     print(f"Inserted batch of {len(batch_dicts)} rows. Total so far: {c}")

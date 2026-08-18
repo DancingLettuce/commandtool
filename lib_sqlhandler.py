@@ -68,7 +68,7 @@ class SqlAService():
                 print(f"ID: {row.id} | Field: {row.my_field}")
         """
         # allow bulk inserts
-        engine = create_engine(self.db_url, fast_executemany=True)
+        engine = self.engine
         """with engine.connect() as connection:
             # Wrap your raw SQL string in the text() function
             result = connection.execute(text(sql))

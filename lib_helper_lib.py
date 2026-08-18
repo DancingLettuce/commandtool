@@ -4,6 +4,7 @@ from datetime import datetime as dt_datetime, timedelta  , timezone as dt_timezo
 from dataclasses import dataclass, field
 import tomllib 
 from pathlib import Path
+from itertools import islice
 
 # git update
 # for d in */ ; do if [ -d "$d.git" ]; then echo -e "\n--- Updating $d ---"; (cd "$d" && git pull); fi; done 
@@ -218,3 +219,14 @@ def get_multiline_input(message :str="Enter your text (Type ':q' on a new line o
     return "\n".join(lines)
 
 
+
+def batched(iterable, n):
+    """
+    Batch data into tuples of length n. The last batch may be shorter.
+    Backport of the Python 3.12 itertools.batched function.
+    """
+    if n < 1:
+        raise ValueError('n must be at least one')
+    it = iter(iterable)
+    while batch := tuple(islice(it, n)):
+        yield batch

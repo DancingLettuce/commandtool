@@ -115,7 +115,8 @@ ALLOWED_COMMANDS={
     'search_object':"",'moveou':"", "upload_file":"param1=folderid",
     "deprovision_user":"", "unsuspend_user":"", "suspend_user":"",
     "delegate_account":"param1=mailbox param2=userwithaccess",
-    "listallprojects":"all | quick","listallorganisations":"","listallfolders":""}
+    "listallprojects":"all | quick","listallorganisations":"","listallfolders":"",
+    "listapis":"project_id"}
   
 ARGS, ARBITRARY_ARGS = init_argparse()
 import lib_helper_lib as helperlib 
@@ -766,6 +767,12 @@ def main():
                                         service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
                                         )
         gh.list_all_folders(sqlh=sqlh)
+    elif args_command == "listapis":
+        gh = lib_googlehandler.GoogleService(
+                delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                )
+        gh.list_enabled_apis(project_id=args_param1)
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  
