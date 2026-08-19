@@ -135,3 +135,20 @@ class CcmGoogleProjectApi(Base):
     state: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
     parent: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
     project_ccm_id: Mapped[int] = mapped_column(BigInteger)
+
+class CcmGoogleProjectApiStaging(Base):
+    __tablename__ = "ccm_googleprojectapi_staging"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_on: Mapped[Optional[datetime]] = mapped_column(
+        DATETIMEOFFSET, server_default=text("getdate()")
+    )
+    api_lastseen: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
+    api_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    name: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    state: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    parent: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    config_name: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    config_title: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    config_summary: Mapped[Optional[str]] = mapped_column(String(5000), server_default="")
+    config_api_data: Mapped[Optional[dict]] = mapped_column(JSON)
+     

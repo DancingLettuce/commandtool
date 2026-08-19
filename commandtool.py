@@ -116,6 +116,7 @@ ALLOWED_COMMANDS={
     "deprovision_user":"", "unsuspend_user":"", "suspend_user":"",
     "delegate_account":"param1=mailbox param2=userwithaccess",
     "listallprojects":"all | quick","listallorganisations":"","listallfolders":"",
+    "listallprojects":"all | quick","listallorganisations":"","listallfolders":"","listallinstances":"param1=project_id",
     "listapis":"project_id"}
   
 ARGS, ARBITRARY_ARGS = init_argparse()
@@ -719,6 +720,7 @@ def main():
         gh.delegate_account(mastermailbox_email=args_param1, 
                             clientaccount_email=args_param2)
     elif args_command == "listallprojects":
+        """args_param1 = all | quick"""
         gh = lib_googlehandler.GoogleService(
                                         delegated_email=CONFIG.get('ADMIN_EMAIL',""),
                                         service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
@@ -769,6 +771,20 @@ def main():
         gh.list_all_folders(sqlh=sqlh)
     elif args_command == "listapis":
         """Pass the proect_id as args_param1"""
+        """-- Select all projects that have the Compute Engine API enabled
+                SELECT
+                    p.project_id,
+                    p.display_name,
+                    p.state
+                FROM
+                    ccm_project AS p
+                INNER JOIN
+                    ccm_googleprojectapi AS gpa ON p.name = gpa.parent
+                WHERE
+                    -- The 'name' in the API table is the full resource name, 
+                    -- so we use LIKE to find the service
+                    gpa.name LIKE '%/compute.googleapis.com';
+"""
         sqlh = lib_sqlhandler.SqlAService(
             cloud_cmdb_database_name=CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
             cloud_cmdb_database_host=CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
@@ -776,12 +792,20 @@ def main():
             cloud_cmdb_database_password=CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
             cloud_cmdb_database_driver=CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
         )
-        existing_api_names = sqlh.get_all_google_api_names()
+        #existing_api_names = sqlh.get_all_google_api_names()
         gh = lib_googlehandler.GoogleService(
                 delegated_email=CONFIG.get('ADMIN_EMAIL',""),
                 service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
                 )
-        gh.list_enabled_apis(project_id=args_param1,sqlh=sqlh,existing_api_names=existing_api_names)
+        sqlh.truncate_table('ccm_googleprojectapi_staging')
+        gh.list_enabled_apis(project_id=args_param1,sqlh=sqlh)
+    elif args_command == "listallinstances":
+        """Pass the project_id as args_param1"""
+        gh = lib_googlehandler.GoogleService(
+                delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                )
+        gh.list_all_instances(project_id=args_param1)
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  
