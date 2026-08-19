@@ -805,7 +805,15 @@ def main():
                 delegated_email=CONFIG.get('ADMIN_EMAIL',""),
                 service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
                 )
-        gh.list_all_instances(project_id=args_param1)
+        sqlh = lib_sqlhandler.SqlAService(
+                    cloud_cmdb_database_name=CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+                    cloud_cmdb_database_host=CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+                    cloud_cmdb_database_user=CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+                    cloud_cmdb_database_password=CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+                    cloud_cmdb_database_driver=CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+                )
+        sqlh.truncate_table('ccm_googleinstance_staging')
+        gh.list_all_instances(project_id=args_param1, sqlh=sqlh)
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

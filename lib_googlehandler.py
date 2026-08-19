@@ -669,7 +669,8 @@ class GoogleService():
         print(f"Deprovisioning steps complete for {account_email}.")
 
     # Google Compute Platform
-    def list_all_projects(self, query: str = "NOT id:sys-* AND NOT id:app-*", sqlh:lib_sqlhandler.SqlAService = None):
+    def list_all_projects(self, query: str = "NOT id:sys-* AND NOT id:app-*", 
+                          sqlh:lib_sqlhandler.SqlAService = None):
         #Google Cloud's Resource Manager API utilizes the AIP-160 filtering standard 
         print(f"Fetching accessible Google Cloud Projects Query={query}")
         engine = sqlh.engine
@@ -916,7 +917,8 @@ class GoogleService():
             raise e 
             return None
 
-    def list_all_instances(self, project_id: str):
+    def list_all_instances(self, project_id: str,
+                           sqlh:lib_sqlhandler.SqlAService = None):
         """
         Lists all Compute Engine VM instances across all zones for a given project.
         Prints the raw JSON output to stdout for inspection.
@@ -953,13 +955,94 @@ class GoogleService():
 
             # 4. Print the collected data as a pretty-printed JSON string
             # Using default=str handles non-serializable types like datetimes
-            print("\n--- RAW API JSON OUTPUT ---")
-            print(json.dumps(all_instances, indent=2, default=str))
+            #print("\n--- RAW API JSON OUTPUT ---")
+            #print(json.dumps(all_instances, indent=2, default=str))
+            # 4. Process the raw instance data into a structured list for the database
+            instances_to_insert = []
+            
+
+            for instance in all_instances:
+                # --- Safely extract nested network information ---
+                # This list will hold details for ALL network interfaces.
+                processed_nics = []
+                # Use .get() to avoid errors if 'networkInterfaces' is missing
+                nics = instance.get('networkInterfaces', [])
+                for nic in nics:
+                    nic_data = {
+                        'name': nic.get('name'),
+                        'network': nic.get('network'),
+                        'network_ip': nic.get('networkIP'),
+                        'nat_ip': None # Default to None
+                    }
+                    # Use .get() again for accessConfigs, which might be missing
+                    access_configs = nic.get('accessConfigs', [])
+                    if access_configs:
+                        # An interface can technically have multiple external IPs, but we'll grab the first one.
+                        nic_data['nat_ip'] = access_configs[0].get('natIP')
+                    processed_nics.append(nic_data)
+                
+                def parse_gcp_timestamp(ts_string):
+                    """Safely parse GCP's ISO 8601 timestamp string."""
+                    if not ts_string:
+                        return None
+                    try:
+                        # fromisoformat handles the timezone offset correctly
+                        return datetime.fromisoformat(ts_string)
+                    except (ValueError, TypeError):
+                        return None
+                        
+                # --- Safely extract disk and license information ---
+                disk_licenses = []
+                disks = instance.get('disks', [])
+                if disks:
+                    # This example collects licenses from ALL disks attached
+                    for disk in disks:
+                        disk_licenses.extend(disk.get('licenses', []))
+
+                # --- Build the flat dictionary for insertion ---
+                #print(json.dumps(instance.get('tags', {}))) 
+                instances_to_insert.append({
+                    'gcp_instance_id': instance.get('id'),
+                    'creation_timestamp': parse_gcp_timestamp(instance.get('creationTimestamp')),
+                    'name': instance.get('name'),
+                    'status': instance.get('status'),
+                    'zone': instance.get('zone', '').split('/')[-1], # Extract just the zone name
+                    'machine_type': instance.get('machineType', '').split('/')[-1], # Extract just the machine type
+                    'last_start_timestamp': parse_gcp_timestamp(instance.get('lastStartTimestamp')),
+                    'last_stop_timestamp': parse_gcp_timestamp(instance.get('lastStopTimestamp')),
+                    'last_suspended_timestamp': parse_gcp_timestamp(instance.get('lastSuspendedTimestamp')),
+                    # Store complex types as JSON strings in the database
+                    'tags_json': instance.get('tags', {}),
+                    #'network_interfaces_json': json.dumps(processed_nics),
+                    #'disks_licenses_json': json.dumps(disk_licenses),
+                    # Keep the full raw data for future analysis or re-processing
+                    'api_data': instance 
+                })
+                #print(f"{instance.get('name')} ")
+            engine = sqlh.engine
+            with Session(engine) as session:
+                session.execute(insert(models.CcmGoogleInstanceStaging), instances_to_insert)
+                session.commit()
+
+            print(f"Processed {len(instances_to_insert)} instances for database staging.")
+
+            # 5. Print the PROCESSED data for your review.
+            # This is the data you will use for your bulk insert.
+            #print("\n--- PROCESSED INSTANCE DATA (ready for DB insert) ---")
+            #print(json.dumps(instances_to_insert, indent=2, default=str))
+
+            # NEXT STEP: You would take 'instances_to_insert' and perform a bulk
+            # insert into your new CcmInstanceStaging table.
+            # with Session(sqlh.engine) as session:
+            #     session.execute(insert(models.CcmInstanceStaging), instances_to_insert)
+            #     session.commit()
 
         except HttpError as e:
             print(f"CRITICAL API ERROR: Failed to list instances for {project_id}. {e.resp.status} - {e.reason}")
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
+            print(f"An unexpected error occurred: {e}", file=sys.stderr)
+            raise
         
     def list_all_organizations(self, sqlh:lib_sqlhandler.SqlAService = None):
         """
@@ -1059,9 +1142,8 @@ class GoogleService():
                     )
                     # 4. Add it to the session workspace (this does NOT hit the DB yet)
                     session.add(new_org_record)"""
-                    org_list.append(org)
                 session.commit() 
-            print(f"Total organizations returned: {len(org_list)}")
+            print(f"Total organizations returned: {c}")
             #return org_list
             
         except Exception as e:
