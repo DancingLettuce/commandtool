@@ -461,6 +461,12 @@ class Transcriber():
         with open('output.json', 'w') as f:
             # Use json.dump to write the data to the file
             json.dump(meeting_data, f, indent=4)
+        with open('output.txt', 'w') as f:
+            # Use json.dump to write the data to the file
+            f.write(timeformat)
+            f.write("\n")
+            f.write(transcript_text)
+            
         return meeting_data   
 
     def generate_text_vector(self, text_to_embed: str):

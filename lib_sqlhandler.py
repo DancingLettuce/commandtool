@@ -8,12 +8,16 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import textwrap
+import csv
 import tomli
 import urllib.parse
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy import insert
 import sqlhandler_models 
+from lib_helper_lib import batched
+
 
 myvar = textwrap.dedent("""\
         This is a long multi-line string inside a function.
@@ -79,9 +83,19 @@ class SqlAService():
             result = connection.execute(text(sql)) 
             print(f"Affected {result.rowcount} rows.")
             # Check if the query actually returned data (like a SELECT) before looping
+            return result 
             if result.returns_rows:
                 for row in result:
                     print(dict(row._mapping))
+
+    def get_dataset(self, sql:str):
+        with Session(self.engine) as session:
+            # Execute the query and immediately fetch all results into a list.
+            # The list of Row objects is detached from the session.
+            result = session.execute(text(sql))
+            # .all() returns a list of Row objects, which behave like tuples.
+            # This list can be safely returned and used after the session is closed.
+            return result.all()
 
             
     def truncate_table(self, tablename:str):
@@ -186,3 +200,107 @@ class SqlAService():
 
 
     """
+    def import_file(self):
+        
+        fieldmapping = {
+            'Plugin ID':'plugin_id',
+            'CVE':'cve',
+            'CVSS':'cvss',
+            'Risk':'risk',
+            'Host':'host',
+            'Protocol':'protocol',
+            'Port':'port',
+            'Name':'name',
+            'Synopsis':'synopsis',
+            'Description':'description',
+            'Solution':'solution',
+            'See Also':'see_also',
+            'Plugin Output':'plugin_output',
+            'Asset UUID':'asset_uuid',
+            #'Vulnerability State':'vulnerability_state',
+            'IP Address':'ip_address',
+            'FQDN':'fqdn',
+            'NetBios':'netbios',
+            'OS':'os',
+            'MAC Address':'mac_address',
+            'Plugin Family':'plugin_family',
+            #'CVSS Base Score':'cvss_base_score',
+            #'CVSS Temporal Score':'cvss_temporal_score',
+            #'CVSS Temporal Vector':'cvss_temporal_vector',
+            #'CVSS Vector':'cvss_vector',
+            #'CVSS3 Base Score':'cvss3_base_score',
+            #'CVSS3 Temporal Score':'cvss3_temporal_score',
+            #'CVSS3 Temporal Vector':'cvss3_temporal_vector',
+            #'CVSS3 Vector':'cvss3_vector',
+            #'System Type':'system_type',
+            'Host Start':'host_start',
+            'Host End':'host_end',
+            #'Vulnerability Priority Rating (VPR)':'vulnerability_priority_rating_vpr',
+            'First Found':'first_found',
+            'Last Found':'last_found',
+            'Host Scan Schedule ID':'host_scan_schedule_id',
+            'Host Scan ID':'host_scan_id',
+            #'Indexed At':'indexed_at',
+            #'Last Authenticated Results Date':'last_authenticated_results_date',
+            #'Last Unauthenticated Results Date':'last_unauthenticated_results_date',
+            #'Tracked':'tracked',
+            #'Risk Factor':'risk_factor',
+            #'Severity':'severity',
+            #'Original Severity':'original_severity',
+            #'Modification':'modification',
+            #'Plugin Family ID':'plugin_family_id',
+            #'Plugin Type':'plugin_type',
+            #'Plugin Version':'plugin_version',
+            #'Service':'service',
+            #'Plugin Modification Date':'plugin_modification_date',
+            #'Plugin Publication Date':'plugin_publication_date',
+            #'Checks for Malware':'checks_for_malware',
+            #'Exploit Available':'exploit_available',
+            #'Exploited by Malware':'exploited_by_malware',
+            #'Exploited by Nessus':'exploited_by_nessus',
+            #'CANVAS':'canvas',
+            #'D2 Elliot':'d2_elliot',
+            #'Metasploit':'metasploit',
+            #'Core Exploits':'core_exploits',
+            #'ExploitHub':'exploithub',
+            #'Default Account':'default_account',
+            #'Patch Available':'patch_available',
+            #'In The News':'in_the_news',
+            #'Unsupported By Vendor':'unsupported_by_vendor',
+            'Last Fixed':'last_fixed'
+        }
+        pass
+
+    def readanycsv(self, filepath:str, fieldmapping: dict = None):
+        with open( filepath,'r', encoding='utf-8') as f:
+            csv_reader = csv.DictReader(f,skipinitialspace=True)
+            c_records =0
+            with Session(self.engine) as session:
+                for chunk in batched(csv_reader, 500):
+                    batch_dicts = []
+                    for row in chunk:
+                        c_records +=1
+                        
+                        batch_dicts.append({
+                            "plugin_id": row['Plugin ID'],
+                            "risk": row['Risk'],
+                            "host": row['Host'],
+                            "protocol": row['Protocol'],
+                            "port": row['Port'],
+                            "name": row['Name'],
+                            "synopsis": row['Synopsis'],
+                            "description": row['Description'],
+                            "solution": row['Solution'],
+                            "see_also": row['See Also'],
+                            "plugin_output": row['Plugin Output'],    
+                            "ip_address": row['IP Address'],
+                        })
+                    print(f"Appending {c_records}")
+                    session.execute(insert(sqlhandler_models.CcmTenableStaging), batch_dicts)
+                    session.commit()
+
+
+
+
+
+

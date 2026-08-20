@@ -170,6 +170,7 @@ class CcmGoogleInstance(Base):
     last_stop_timestamp: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
     last_suspended_timestamp: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
     tags_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    project_id: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
 
 class CcmGoogleInstanceStaging(Base):
     __tablename__ = "ccm_googleinstance_staging"
@@ -189,6 +190,8 @@ class CcmGoogleInstanceStaging(Base):
     last_stop_timestamp: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
     last_suspended_timestamp: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
     tags_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    project_id: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+
 
 class CcmGoogleInstanceNetwork(Base):
     __tablename__ = "ccm_googleinstance_network"
@@ -219,7 +222,7 @@ class CcmGoogleInstanceDiskLicence(Base):
     gcp_instance_id: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
     licence: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
 
-class CcmGoogleInstanceDiskLicenceStagiing(Base):
+class CcmGoogleInstanceDiskLicenceStaging(Base):
     __tablename__ = "ccm_googleinstance_disklicence_staging"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     created_on: Mapped[Optional[datetime]] = mapped_column(
@@ -227,3 +230,68 @@ class CcmGoogleInstanceDiskLicenceStagiing(Base):
     )
     gcp_instance_id: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
     licence: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+
+class CcmGoogleLoadBalancer(Base):
+    __tablename__ = "ccm_googleloadbalancer"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_on: Mapped[Optional[datetime]] = mapped_column(
+        DATETIMEOFFSET, server_default=text("getdate()")
+    )
+    api_lastseen: Mapped[Optional[datetime]] = mapped_column(DATETIMEOFFSET)
+    api_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    gcp_lb_id: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    name: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    project_id: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    region: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    ip_address: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    ip_protocol: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    target: Mapped[Optional[str]] = mapped_column(String(500), server_default="")
+    backend_service: Mapped[Optional[str]] = mapped_column(String(500), server_default="")
+
+class CcmGoogleLoadBalancerStaging(Base):
+    __tablename__ = "ccm_googleloadbalancer_staging"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_on: Mapped[Optional[datetime]] = mapped_column(
+        DATETIMEOFFSET, server_default=text("getdate()")
+    )
+    api_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    gcp_lb_id: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    name: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    project_id: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    region: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    ip_address: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    ip_protocol: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    target: Mapped[Optional[str]] = mapped_column(String(500), server_default="")
+    backend_service: Mapped[Optional[str]] = mapped_column(String(500), server_default="")
+
+class CcmTenableStaging(Base):
+    __tablename__ = "ccm_tenable_staging"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_on: Mapped[Optional[datetime]] = mapped_column(
+        DATETIMEOFFSET, server_default=text("getdate()")
+    )
+    etl_filename: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    plugin_id : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    risk : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    host : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    protocol : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    port : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    name : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    synopsis : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    description : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    solution : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    see_also : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    plugin_output : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    asset_uuid : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    ip_address : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    fqdn : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    netbios : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    os : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    mac_address : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    plugin_family : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    host_start : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    host_end : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    first_found : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    last_found : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    host_scan_schedule_id : Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    host_scan_id : Mapped[Optional[str]] = mapped_column(String(50), server_default="")

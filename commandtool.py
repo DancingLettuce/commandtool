@@ -116,8 +116,8 @@ ALLOWED_COMMANDS={
     "deprovision_user":"", "unsuspend_user":"", "suspend_user":"",
     "delegate_account":"param1=mailbox param2=userwithaccess",
     "listallprojects":"all | quick","listallorganisations":"","listallfolders":"",
-    "listallprojects":"all | quick","listallorganisations":"","listallfolders":"","listallinstances":"param1=project_id",
-    "listapis":"project_id"}
+    "listallprojects":"all | quick","listallorganisations":"","listallfolders":"","listallinstances":"param1=project_id","listallloadbalancers":"param1=project_id",
+    "listapis":"project_id","ingesttenable": "file_path"}
   
 ARGS, ARBITRARY_ARGS = init_argparse()
 import lib_helper_lib as helperlib 
@@ -502,7 +502,14 @@ def main():
             pass # do menu  
     elif args_command == 'upload':
         folder_source = ''
-        upload_recent_file(folder_path=CONFIG["MEDIA_SOURCE"], days=7)    
+        if args_param1:
+            folder_path = args_param1
+            filetype = ''
+        else:
+            folder_path = CONFIG["MEDIA_SOURCE"]
+            filetype = '.mp3'
+        print(folder_path) 
+        upload_recent_file(folder_path=folder_path, filetype=filetype,  days=7)    
         fl.print_log_file("jj", summary=True ) 
     elif args_command == 'transcribe':
         transcribe_mp3()
@@ -813,7 +820,43 @@ def main():
                     cloud_cmdb_database_driver=CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
                 )
         sqlh.truncate_table('ccm_googleinstance_staging')
+        sqlh.truncate_table('ccm_googleinstance_network_staging') 
+        sqlh.truncate_table('ccm_googleinstance_disklicence_staging')
         gh.list_all_instances(project_id=args_param1, sqlh=sqlh)
+    elif args_command == "listallloadbalancers":
+        """Pass the project_id as args_param1"""
+        gh = lib_googlehandler.GoogleService(
+                delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                )
+        sqlh = lib_sqlhandler.SqlAService(
+                    cloud_cmdb_database_name=CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+                    cloud_cmdb_database_host=CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+                    cloud_cmdb_database_user=CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+                    cloud_cmdb_database_password=CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+                    cloud_cmdb_database_driver=CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+                )
+        sqlh.truncate_table('ccm_googleloadbalancer_staging')
+        gh.list_all_load_balancers(project_id=args_param1, sqlh=sqlh)
+    elif args_command == "ingesttenable":
+        if not args_param1:
+            filepath = get_file(folder_path='', filetype='.csv', days=10)
+        else:
+            filepath = args_param1
+        if not filepath:
+            print(f"No file selected {filepath}")
+            return
+        sqlh = lib_sqlhandler.SqlAService(
+                            cloud_cmdb_database_name=CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+                            cloud_cmdb_database_host=CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+                            cloud_cmdb_database_user=CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+                            cloud_cmdb_database_password=CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+                            cloud_cmdb_database_driver=CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+                        )
+        sqlh.truncate_table('ccm_tenable_staging')
+        sqlh.readanycsv(filepath=filepath)
+
+
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

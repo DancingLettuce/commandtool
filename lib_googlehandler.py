@@ -39,7 +39,7 @@ except Exception as e:
 
 import lib_helper_lib as helperlib 
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 # Instead of: from itertools import batched
@@ -923,108 +923,238 @@ class GoogleService():
         Lists all Compute Engine VM instances across all zones for a given project.
         Prints the raw JSON output to stdout for inspection.
         """
-        print(f"Fetching all VM instances for project: {project_id}...")
+        projects_to_scan = []
+        if project_id.lower() == "all":
+            print("Mode: 'all'. Fetching projects with Compute API enabled from the database.")
+            projects_query = """
+                SELECT cp.project_id 
+                FROM ccm_googleprojectapi cg
+                INNER JOIN ccm_project cp ON cg.parent = cp.name 
+                WHERE cg.name LIKE '%services/compute.googleapis.com%';
+            """
+            
+            result = sqlh.get_dataset(projects_query)
+            print(result) 
+            projects_to_scan = [row[0] for row in result]
+            print(f"Found {len(projects_to_scan)} projects with Compute API enabled.")
+        else:
+            print(f"Mode: 'specific'. Processing project: {project_id}")
+            projects_to_scan.append(project_id)
+        instances_to_insert = []
+        networks_to_insert = []
+        disks_to_insert = []
+        total_instances_found = 0
 
-        try:
-            # 1. Build the Compute Engine service object
-            compute_service = build('compute', 'v1', credentials=self.base_creds)
+        compute_service = build('compute', 'v1', credentials=self.base_creds)
 
-            # 2. Use aggregatedList to get instances from all zones in one call
-            request = compute_service.instances().aggregatedList(project=project_id)
+        for i, current_project_id in enumerate(projects_to_scan, 1):
+            print(f"\n--- Processing project {i}/{len(projects_to_scan)}: {current_project_id} ---")
+            try:
+    
+                # 2. Use aggregatedList to get instances from all zones in one call
+                request = compute_service.instances().aggregatedList(project=current_project_id)
+                project_instances = []
 
-            all_instances = []
+                # 3. Handle pagination for the aggregated list
+                while request is not None:
+                    response = request.execute()
 
-            # 3. Handle pagination for the aggregated list
-            while request is not None:
-                response = request.execute()
+                    # The response is a dictionary where keys are 'zones/zone-name'
+                    # and values contain the list of instances for that zone.
+                    for name, instances_scoped_list in response['items'].items():
+                        # The 'instances' key might be missing if a zone has no VMs
+                        if 'instances' in instances_scoped_list:
+                            project_instances.extend(instances_scoped_list['instances'])
 
-                # The response is a dictionary where keys are 'zones/zone-name'
-                # and values contain the list of instances for that zone.
-                for name, instances_scoped_list in response['items'].items():
-                    # The 'instances' key might be missing if a zone has no VMs
-                    if 'instances' in instances_scoped_list:
-                        all_instances.extend(instances_scoped_list['instances'])
+                    # Get the next page token to continue the loop
+                    request = compute_service.instances().aggregatedList_next(
+                        previous_request=request, 
+                        previous_response=response
+                    )
 
-                # Get the next page token to continue the loop
-                request = compute_service.instances().aggregatedList_next(
-                    previous_request=request, 
-                    previous_response=response
-                )
+                print(f"Found {len(project_instances)} instances in {current_project_id}.")
+                total_instances_found += len(project_instances)
 
-            print(f"Found a total of {len(all_instances)} instances across all zones.")
-
-            # 4. Print the collected data as a pretty-printed JSON string
-            # Using default=str handles non-serializable types like datetimes
-            #print("\n--- RAW API JSON OUTPUT ---")
-            #print(json.dumps(all_instances, indent=2, default=str))
-            # 4. Process the raw instance data into a structured list for the database
-            instances_to_insert = []
+                # 4. Print the collected data as a pretty-printed JSON string
+                # Using default=str handles non-serializable types like datetimes
+                #print("\n--- RAW API JSON OUTPUT ---")
+                #print(json.dumps(all_instances, indent=2, default=str))
+                # 4. Process the raw instance data into a structured list for the database
+  
             
 
-            for instance in all_instances:
-                # --- Safely extract nested network information ---
-                # This list will hold details for ALL network interfaces.
-                processed_nics = []
-                # Use .get() to avoid errors if 'networkInterfaces' is missing
-                nics = instance.get('networkInterfaces', [])
-                for nic in nics:
-                    nic_data = {
-                        'name': nic.get('name'),
-                        'network': nic.get('network'),
-                        'network_ip': nic.get('networkIP'),
-                        'nat_ip': None # Default to None
-                    }
-                    # Use .get() again for accessConfigs, which might be missing
-                    access_configs = nic.get('accessConfigs', [])
-                    if access_configs:
-                        # An interface can technically have multiple external IPs, but we'll grab the first one.
-                        nic_data['nat_ip'] = access_configs[0].get('natIP')
-                    processed_nics.append(nic_data)
+                for instance in project_instances:
+                    # --- Safely extract nested network information ---
+                    # This list will hold details for ALL network interfaces.
+                    processed_nics = []
+                    instance_id = instance.get('id')
+                    # Use .get() to avoid errors if 'networkInterfaces' is missing
+                    nics = instance.get('networkInterfaces', [])
+                    for nic in nics:
+                        # Create a record for the internal network IP
+                        if nic.get('networkIP'):
+                            networks_to_insert.append({
+                                'gcp_instance_id': instance_id,
+                                'ip_type': 'networkIP',
+                                'ip_address': nic.get('networkIP')
+                            })
+                        # Loop through access configs for external NAT IPs
+                        access_configs = nic.get('accessConfigs', [])
+                        for ac in access_configs:
+                            if ac.get('natIP'):
+                                networks_to_insert.append({
+                                    'gcp_instance_id': instance_id,
+                                    'ip_type': 'natIP',
+                                    'ip_address': ac.get('natIP')
+                                })
                 
-                def parse_gcp_timestamp(ts_string):
-                    """Safely parse GCP's ISO 8601 timestamp string."""
-                    if not ts_string:
-                        return None
-                    try:
-                        # fromisoformat handles the timezone offset correctly
-                        return datetime.fromisoformat(ts_string)
-                    except (ValueError, TypeError):
-                        return None
-                        
-                # --- Safely extract disk and license information ---
-                disk_licenses = []
-                disks = instance.get('disks', [])
-                if disks:
-                    # This example collects licenses from ALL disks attached
+                    # --- Safely extract disk and license information ---
+                    disks = instance.get('disks', [])
                     for disk in disks:
-                        disk_licenses.extend(disk.get('licenses', []))
+                        # A disk can have multiple licenses
+                        for license_url in disk.get('licenses', []):
+                            disks_to_insert.append({
+                                'gcp_instance_id': instance_id,
+                                'licence': license_url # Note the spelling for the DB column
+                            })
 
-                # --- Build the flat dictionary for insertion ---
-                #print(json.dumps(instance.get('tags', {}))) 
-                instances_to_insert.append({
-                    'gcp_instance_id': instance.get('id'),
-                    'creation_timestamp': parse_gcp_timestamp(instance.get('creationTimestamp')),
-                    'name': instance.get('name'),
-                    'status': instance.get('status'),
-                    'zone': instance.get('zone', '').split('/')[-1], # Extract just the zone name
-                    'machine_type': instance.get('machineType', '').split('/')[-1], # Extract just the machine type
-                    'last_start_timestamp': parse_gcp_timestamp(instance.get('lastStartTimestamp')),
-                    'last_stop_timestamp': parse_gcp_timestamp(instance.get('lastStopTimestamp')),
-                    'last_suspended_timestamp': parse_gcp_timestamp(instance.get('lastSuspendedTimestamp')),
-                    # Store complex types as JSON strings in the database
-                    'tags_json': instance.get('tags', {}),
-                    #'network_interfaces_json': json.dumps(processed_nics),
-                    #'disks_licenses_json': json.dumps(disk_licenses),
-                    # Keep the full raw data for future analysis or re-processing
-                    'api_data': instance 
-                })
-                #print(f"{instance.get('name')} ")
-            engine = sqlh.engine
-            with Session(engine) as session:
-                session.execute(insert(models.CcmGoogleInstanceStaging), instances_to_insert)
-                session.commit()
+                
+                    def parse_gcp_timestamp(ts_string):
+                        """Safely parse GCP's ISO 8601 timestamp string."""
+                        if not ts_string:
+                            return None
+                        try:
+                            # fromisoformat handles the timezone offset correctly
+                            return datetime.fromisoformat(ts_string)
+                        except (ValueError, TypeError):
+                            return None
+                            
+                    instances_to_insert.append({
+                        'gcp_instance_id': instance_id,
+                        'creation_timestamp': parse_gcp_timestamp(instance.get('creationTimestamp')),
+                        'name': instance.get('name'),
+                        'status': instance.get('status'),
+                        'zone': instance.get('zone', '').split('/')[-1], # Extract just the zone name
+                        'machine_type': instance.get('machineType', '').split('/')[-1], # Extract just the machine type
+                        'last_start_timestamp': parse_gcp_timestamp(instance.get('lastStartTimestamp')),
+                        'last_stop_timestamp': parse_gcp_timestamp(instance.get('lastStopTimestamp')),
+                        'last_suspended_timestamp': parse_gcp_timestamp(instance.get('lastSuspendedTimestamp')),
+                        # Store complex types as JSON strings in the database
+                        'tags_json': instance.get('tags', {}),
+                        #'network_interfaces_json': json.dumps(processed_nics),
+                        #'disks_licenses_json': json.dumps(disk_licenses),
+                        # Keep the full raw data for future analysis or re-processing
+                        'api_data': instance ,
+                        'project_id':current_project_id
+                    })
+                    
+            except HttpError as e:
+                print(f"CRITICAL API ERROR: Failed to list instances for {project_id}. {e.resp.status} - {e.reason}")
+            except Exception as e:
+                print(f"An unexpected error occurred: {e}")
+                print(f"An unexpected error occurred: {e}", file=sys.stderr)
+                raise
 
-            print(f"Processed {len(instances_to_insert)} instances for database staging.")
+        # --- Final Bulk Insert and Merge ---
+        if not instances_to_insert:
+            print("\nNo instances found across all processed projects. Nothing to stage or merge.")
+            return
+        engine = sqlh.engine
+        print(f"\nStaging a total of {len(instances_to_insert)} instances, {len(networks_to_insert)} networks, and {len(disks_to_insert)} disk licences.")
+    
+        with Session(engine) as session:
+            session.execute(insert(models.CcmGoogleInstanceStaging), instances_to_insert)
+            session.execute(insert(models.CcmGoogleInstanceNetworkStaging), networks_to_insert)
+            session.execute(insert(models.CcmGoogleInstanceDiskLicenceStaging), disks_to_insert)
+            session.commit()
+
+            
+            # --- Merge Network Data ---
+            network_merge_sql = """
+                MERGE INTO ccm_googleinstance_network AS Target
+                USING (
+                    SELECT DISTINCT gcp_instance_id, ip_type, ip_address
+                    FROM ccm_googleinstance_network_staging
+                ) AS Source
+                ON Target.gcp_instance_id = Source.gcp_instance_id AND Target.ip_address = Source.ip_address
+
+                -- 1. If the IP is in Staging but not in the main table, INSERT it.
+                WHEN NOT MATCHED BY TARGET THEN
+                    INSERT (gcp_instance_id, ip_type, ip_address)
+                    VALUES (Source.gcp_instance_id, Source.ip_type, Source.ip_address)
+
+                -- 2. If an IP exists for an instance in the main table but NOT in staging, DELETE it.
+                -- This handles IPs that were removed from a VM for the project being scanned.
+                WHEN NOT MATCHED BY SOURCE AND Target.gcp_instance_id IN (SELECT DISTINCT gcp_instance_id FROM ccm_googleinstance_staging) THEN
+                    DELETE;
+            """
+            sqlh.execute_sql(network_merge_sql)
+            print("Network information merged successfully.")
+
+            # --- Merge Disk Licence Data ---
+            licence_merge_sql = """
+                MERGE INTO ccm_googleinstance_disklicence AS Target
+                USING (
+                    SELECT DISTINCT gcp_instance_id, licence
+                    FROM ccm_googleinstance_disklicence_staging
+                ) AS Source
+                ON Target.gcp_instance_id = Source.gcp_instance_id AND Target.licence = Source.licence
+
+                -- 1. If the licence is in Staging but not in the main table, INSERT it.
+                WHEN NOT MATCHED BY TARGET THEN
+                    INSERT (gcp_instance_id, licence)
+                    VALUES (Source.gcp_instance_id, Source.licence)
+
+                -- 2. If a licence exists for an instance in the main table but NOT in staging, DELETE it.
+                -- This handles licences that were removed from a VM's disks for the project being scanned.
+                WHEN NOT MATCHED BY SOURCE AND Target.gcp_instance_id IN (SELECT DISTINCT gcp_instance_id FROM ccm_googleinstance_staging) THEN
+                    DELETE;
+            """
+            sqlh.execute_sql(licence_merge_sql)
+            print("Disk licence information merged successfully.")
+
+        # --- Merge Main Instance Data ---
+        instance_merge_sql = """
+            MERGE INTO ccm_googleinstance AS Target
+            USING ccm_googleinstance_staging AS Source
+            ON Target.gcp_instance_id = Source.gcp_instance_id
+
+            -- 1. If an instance exists in both tables, UPDATE its details.
+            WHEN MATCHED THEN
+                UPDATE SET
+                    Target.api_lastseen = GETUTCDATE(),
+                    Target.name = Source.name,
+                    Target.status = Source.status,
+                    Target.zone = Source.zone,
+                    Target.machine_type = Source.machine_type,
+                    Target.last_start_timestamp = Source.last_start_timestamp,
+                    Target.last_stop_timestamp = Source.last_stop_timestamp,
+                    Target.last_suspended_timestamp = Source.last_suspended_timestamp,
+                    Target.tags_json = Source.tags_json,
+                    Target.api_data = Source.api_data,
+                    Target.project_id = Source.project_id
+
+
+            -- 2. If an instance is in Staging but not in the main table, INSERT it.
+            WHEN NOT MATCHED BY TARGET THEN
+                INSERT (
+                    gcp_instance_id, api_lastseen, creation_timestamp, name, status, zone,
+                    machine_type, last_start_timestamp, last_stop_timestamp,
+                    last_suspended_timestamp, tags_json, api_data,project_id
+                )
+                VALUES (
+                    Source.gcp_instance_id, GETUTCDATE(), Source.creation_timestamp, Source.name, Source.status, Source.zone,
+                    Source.machine_type, Source.last_start_timestamp, Source.last_stop_timestamp,
+                    Source.last_suspended_timestamp, Source.tags_json, Source.api_data, Source.project_id
+                )
+
+            -- 3. If an instance is in the main table but NOT in staging, DELETE it (handles deleted VMs).
+            WHEN NOT MATCHED BY SOURCE AND Target.gcp_instance_id IN (SELECT DISTINCT gcp_instance_id FROM ccm_googleinstance_staging) THEN
+                DELETE;
+        """
+        sqlh.execute_sql(instance_merge_sql)
+        print("Main instance information merged successfully.")
+
 
             # 5. Print the PROCESSED data for your review.
             # This is the data you will use for your bulk insert.
@@ -1037,12 +1167,117 @@ class GoogleService():
             #     session.execute(insert(models.CcmInstanceStaging), instances_to_insert)
             #     session.commit()
 
-        except HttpError as e:
-            print(f"CRITICAL API ERROR: Failed to list instances for {project_id}. {e.resp.status} - {e.reason}")
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-            print(f"An unexpected error occurred: {e}", file=sys.stderr)
-            raise
+    def list_all_load_balancers(self, project_id: str,
+                                sqlh: lib_sqlhandler.SqlAService = None):
+        """
+        Lists all Load Balancer Forwarding Rules across all regions for a given project or all projects.
+        """
+        projects_to_scan = []
+        if project_id.lower() == "all":
+            print("Mode: 'all'. Fetching projects with Compute API enabled from the database.")
+            projects_query = """
+                SELECT cp.project_id 
+                FROM ccm_googleprojectapi cg
+                INNER JOIN ccm_project cp ON cg.parent = cp.name 
+                WHERE cg.name LIKE '%services/compute.googleapis.com%';
+            """
+            project_rows = sqlh.get_dataset(projects_query)
+            projects_to_scan = [row[0] for row in project_rows]
+            print(f"Found {len(projects_to_scan)} projects to scan for load balancers.")
+        else:
+            print(f"Mode: 'specific'. Processing project: {project_id}")
+            projects_to_scan.append(project_id)
+
+        load_balancers_to_insert = []
+        total_lbs_found = 0
+        compute_service = build('compute', 'v1', credentials=self.base_creds)
+        c=0
+        for i, current_project_id in enumerate(projects_to_scan, 1):
+            c+=1
+
+            print(f"\n--- Processing project {i}/{len(projects_to_scan)}: {current_project_id} ---")
+            try:
+                request = compute_service.forwardingRules().aggregatedList(project=current_project_id)
+                project_lbs = []
+
+                while request is not None:
+                    response = request.execute()
+                    for region, scoped_list in response.get('items', {}).items():
+                        if 'forwardingRules' in scoped_list:
+                            # Add the region to each rule for context
+                            for rule in scoped_list['forwardingRules']:
+                                rule['region'] = region.split('/')[-1]
+                                project_lbs.append(rule)
+                    request = compute_service.forwardingRules().aggregatedList_next(
+                        previous_request=request, previous_response=response)
+
+                print(f"Found {len(project_lbs)} forwarding rules in {current_project_id}.")
+                total_lbs_found += len(project_lbs)
+
+                for lb in project_lbs:
+                    print(lb)
+                    load_balancers_to_insert.append({
+                        'gcp_lb_id': lb.get('id'),
+                        'name': lb.get('name'),
+                        'project_id': current_project_id,
+                        'region': lb.get('region', 'global'),
+                        'ip_address': lb.get('IPAddress'),
+                        'ip_protocol': lb.get('IPProtocol'),
+                        'target': lb.get('target'),
+                        'backend_service': lb.get('backendService'),
+                        'api_data': lb
+                    })
+
+            except HttpError as e:
+                print(f"API ERROR for project {current_project_id}: {e.resp.status} - {e.reason}. Skipping.")
+            except Exception as e:
+                print(f"An unexpected error occurred for project {current_project_id}: {e}. Skipping.")
+
+        if not load_balancers_to_insert:
+            print("\nNo load balancers found across all processed projects. Nothing to stage or merge.")
+            return
+
+        print(f"\nStaging a total of {len(load_balancers_to_insert)} load balancers.")
+        engine = sqlh.engine
+        with Session(engine) as session:
+            session.execute(insert(models.CcmGoogleLoadBalancerStaging), load_balancers_to_insert)
+            session.commit()
+
+        print("Staging complete. Now merging into main ccm_googleloadbalancer table...")
+
+        merge_sql = """
+            MERGE INTO ccm_googleloadbalancer AS Target
+            USING ccm_googleloadbalancer_staging AS Source
+            ON Target.gcp_lb_id = Source.gcp_lb_id
+
+            WHEN MATCHED THEN
+                UPDATE SET
+                    Target.api_lastseen = GETUTCDATE(),
+                    Target.name = Source.name,
+                    Target.project_id = Source.project_id,
+                    Target.region = Source.region,
+                    Target.ip_address = Source.ip_address,
+                    Target.ip_protocol = Source.ip_protocol,
+                    Target.target = Source.target,
+                    Target.backend_service = Source.backend_service,
+                    Target.api_data = Source.api_data
+
+            WHEN NOT MATCHED BY TARGET THEN
+                INSERT (
+                    api_lastseen, gcp_lb_id, name, project_id, region, ip_address,
+                    ip_protocol, target, backend_service, api_data
+                )
+                VALUES (
+                    GETUTCDATE(), Source.gcp_lb_id, Source.name, Source.project_id, Source.region, Source.ip_address,
+                    Source.ip_protocol, Source.target, Source.backend_service, Source.api_data
+                )
+
+            WHEN NOT MATCHED BY SOURCE AND Target.project_id IN (SELECT DISTINCT project_id FROM ccm_googleloadbalancer_staging) THEN
+                DELETE;
+        """
+        sqlh.execute_sql(merge_sql)
+        print("Load balancer information merged successfully.")
+
         
     def list_all_organizations(self, sqlh:lib_sqlhandler.SqlAService = None):
         """
