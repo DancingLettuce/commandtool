@@ -64,8 +64,8 @@ class GoogleService():
         'https://www.googleapis.com/auth/ediscovery',            # Vault API
         'https://www.googleapis.com/auth/drive',                 # Drive API
         'https://www.googleapis.com/auth/devstorage.read_only',   # Cloud Storage API
-        'https://www.googleapis.com/auth/compute.readonly',       # Compute Engine read-only
-        'https://www.googleapis.com/auth/cloud-platform.read-only', # GCP Resource Manager API, can't use this with workspace unless scope assigned
+        #'https://www.googleapis.com/auth/compute.readonly',       # Compute Engine read-only
+        #'https://www.googleapis.com/auth/cloud-platform.read-only', # GCP Resource Manager API, can't use this with workspace unless scope assigned
         ]
     # scopes are assigned under domain wide delegation in Google Worskpace admin.google.com
     SCOPES_GCP = ['https://www.googleapis.com/auth/cloud-platform.read-only', # GCP Resource Manager API, can't use this with workspace

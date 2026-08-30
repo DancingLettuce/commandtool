@@ -282,6 +282,7 @@ class SqlAService():
                         c_records +=1
                         
                         batch_dicts.append({
+                            "etl_filename": filepath,
                             "plugin_id": row['Plugin ID'],
                             "risk": row['Risk'],
                             "host": row['Host'],

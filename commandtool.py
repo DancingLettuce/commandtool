@@ -845,7 +845,7 @@ def main():
             filepath = args_param1
         if not filepath:
             print(f"No file selected {filepath}")
-            return
+            return 
         sqlh = lib_sqlhandler.SqlAService(
                             cloud_cmdb_database_name=CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
                             cloud_cmdb_database_host=CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
