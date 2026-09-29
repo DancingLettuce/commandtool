@@ -96,7 +96,6 @@ class SqlAService():
             # .all() returns a list of Row objects, which behave like tuples.
             # This list can be safely returned and used after the session is closed.
             return result.all()
-
             
     def truncate_table(self, tablename:str):
         engine = create_engine(self.db_url)
@@ -106,8 +105,6 @@ class SqlAService():
             # 2. Commit the transaction
             session.commit()
             print(f"Table {tablename} truncated.")
-
-
 
     def get_all_google_api_names(self) -> set[str]:
         """
@@ -271,7 +268,43 @@ class SqlAService():
         }
         pass
 
-    def readanycsv(self, filepath:str, fieldmapping: dict = None):
+    def readcsv_tenable(self, filepath:str):
+        # =SUBSTITUTE(lower(G1)," ", "_")
+        # =="""" &H1& """:row['" & G1 &"']," 
+        with open( filepath,'r', encoding='utf-8') as f:
+            csv_reader = csv.DictReader(f,skipinitialspace=True)
+            c_records =0
+            with Session(self.engine) as session:
+                for chunk in batched(csv_reader, 500):
+                    batch_dicts = []
+                    for row in chunk:
+                        c_records +=1
+                        
+                        batch_dicts.append({
+                                "etl_filename": filepath,
+                                "plugin_id": row['Plugin ID'],
+                                "risk": row['Risk'],
+                                "host": row['Host'],
+                                "protocol": row['Protocol'],
+                                "port": row['Port'],
+                                "name": row['Name'],
+                                "synopsis": row['Synopsis'],
+                                "description": row['Description'],
+                                "solution": row['Solution'],
+                                "see_also": row['See Also'],
+                                "plugin_output": row['Plugin Output'],    
+                                "ip_address": row['IP Address'],
+                                'host_start':row['Host Start'],
+                                'host_end':row['Host End'],
+                                "os":row["OS"],
+                                'host_scan_schedule_id':row['Host Scan Schedule ID'],
+                                'host_scan_id':row['Host Scan ID'],
+                        })
+                    print(f"Appending {c_records}")
+                    session.execute(insert(sqlhandler_models.CcmTenableStaging), batch_dicts)
+                    session.commit()
+
+    def readcsv_dnszone(self, filepath:str):
         with open( filepath,'r', encoding='utf-8') as f:
             csv_reader = csv.DictReader(f,skipinitialspace=True)
             c_records =0
@@ -283,24 +316,83 @@ class SqlAService():
                         
                         batch_dicts.append({
                             "etl_filename": filepath,
-                            "plugin_id": row['Plugin ID'],
-                            "risk": row['Risk'],
-                            "host": row['Host'],
-                            "protocol": row['Protocol'],
-                            "port": row['Port'],
-                            "name": row['Name'],
-                            "synopsis": row['Synopsis'],
-                            "description": row['Description'],
-                            "solution": row['Solution'],
-                            "see_also": row['See Also'],
-                            "plugin_output": row['Plugin Output'],    
-                            "ip_address": row['IP Address'],
+                            "rrid":row['rrid'],
+                            "owner":row['Owner'],
+                            "created":row['Created'],
+                            "encoding":row['Encoding'],
+                            "zone":row['Zone'],
+                            "dname":row['Dname'],
+                            "dname_clean": row['Dname'].removesuffix("."), 
+                            "type":row['Type'],
+                            "class":row['Class'],
+                            "ttl":row['TTL'],
+                            "lname":row['Lname'],
+                            "info1":row['Info1'],
+                            "info2":row['Info2'],
+                            "info3":row['Info3'],
+                            "info4":row['Info4'],
+                            "info5":row['Info5'],
+                            "info6":row['Info6'],
+                            "info7":row['Info7'],
+                            "info8":row['Info8'],
+                            "reference":row['Reference'],
+                            "server_mask":row['Server Mask'],
+                            "timemask":row['Timemask'],
+                            "restrict_access":row['Restrict Access'],
+                            "monitor":row['Monitor'],
+                            "dead":row['Dead'],
+                            "suspended":row['Suspended'],
+                            "countflag":row['Countflag'],
+                            "modified":row['Modified'],
                         })
                     print(f"Appending {c_records}")
-                    session.execute(insert(sqlhandler_models.CcmTenableStaging), batch_dicts)
+                    session.execute(insert(sqlhandler_models.CcmDnsZoneStaging), batch_dicts)
                     session.commit()
+        """
+        TRUNCATE TABLE ccm_dnszone;
+        INSERT INTO RPA_Reporting.dbo.ccm_dnszone
+                    (created, [zone], dname_clean, [type], 
+                    info1, info2, info3, info4, info5, info6, info7, info8, 
+                    reference, modified)
+                    SELECT DISTINCT created, [zone], dname_clean, [type], 
+                        info1, info2, info3, info4, info5, info6, info7, info8, 
+                        reference, modified 
+                    FROM ccm_dnszone_staging;
 
+        UPDATE dz 
+            SET cmi_configurationitem_id = ci.id 
+            FROM ccm_dnszone dz
+            INNER JOIN cmi_configurationitem ci ON dz.dname_clean = ci.name; 
+        
+        """
+        merge_sql = r"""
+            
+            MERGE INTO cmi_configurationitem AS Target
+                        USING 
+                        (SELECT DISTINCT dname_clean 
+                            FROM ccm_dnszone_staging 
+                            WHERE dname_clean !='' AND dname_clean IS NOT NULL)
+                        AS Source
+                        ON Target.name = Source.dname_clean
+                        WHEN MATCHED THEN
+                            UPDATE SET
+                                Target.lastseen = GETUTCDATE(),
+                                Target.updated_on = GETUTCDATE()
+                        WHEN NOT MATCHED BY TARGET THEN
+                            INSERT (
+                                lastseen, name, firstseen, activelabel, status_class
+                            )
+                            VALUES (
+                                GETUTCDATE(), Source.dname_clean, GETUTCDATE(), 'dnszone', 'is-dnszone'
+                            );
+            UPDATE cmi_configurationitem 
+            SET status_class = concat(status_class, ' is-dnszone')
+            WHERE name in (SELECT dname_clean FROM ccm_dnszone_staging )
+            AND status_class not like '%is-dnszone%';
 
+        """       
+        print(f"Merging data")
+        self.execute_sql(merge_sql)
 
 
 

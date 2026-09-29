@@ -66,7 +66,7 @@ class GoogleService():
         'https://www.googleapis.com/auth/devstorage.read_only',   # Cloud Storage API
         #'https://www.googleapis.com/auth/compute.readonly',       # Compute Engine read-only
         #'https://www.googleapis.com/auth/cloud-platform.read-only', # GCP Resource Manager API, can't use this with workspace unless scope assigned
-        ]
+        ]  
     # scopes are assigned under domain wide delegation in Google Worskpace admin.google.com
     SCOPES_GCP = ['https://www.googleapis.com/auth/cloud-platform.read-only', # GCP Resource Manager API, can't use this with workspace
         ]
@@ -84,15 +84,18 @@ class GoogleService():
     googleuser_default_hold_ou: list = field(default_factory=list)
 
     def get_serviceaccount_service(self, 
-        api_servicename:str=None,
-        api_version:str=None,
+        api_servicename:str,
+        api_version:str,
         delegated_email: str=None):
-        api_servicename = self.api_servicename if api_servicename is None else api_servicename
-        api_version = self.api_servicename if api_version is None else api_version
+        
         delegated_email = self.delegated_email if delegated_email is None else delegated_email 
+        # Use a broader scope set that includes cloudidentity
+        
+        #scopes = self.SCOPES + ['https://www.googleapis.com/auth/cloud-identity']
+        scopes = self.SCOPES
         creds = service_account.Credentials.from_service_account_file(
                 self.service_account_file, 
-                scopes=self.SCOPES,
+                scopes=scopes,
                 subject=delegated_email
             )
         return build(api_servicename, api_version, credentials=creds)
@@ -542,6 +545,7 @@ class GoogleService():
                 resetpassword:bool=False, 
                 movetodefaultou:bool=False,
                 suspend:bool = False,
+                pwresetnextlogin:bool = False,
                 ):
         body = {}  
         if unsuspend:
@@ -554,6 +558,8 @@ class GoogleService():
             body["orgUnitPath"] = self.googleuser_default_hold_ou
         if suspend:
             body["suspended"] = True
+        if pwresetnextlogin:
+            body["changePasswordAtNextLogin"] = True
         return self.get_serviceaccount_admin.users().patch(
                     userKey=account_email, 
                     body=body
@@ -596,6 +602,53 @@ class GoogleService():
         print("Success! Document created and populated.")
         print(f"Document Link: https://docs.google.com/document/d/{doc_id}/edit")
 
+    def revoke_oauthapplicationpwd_user(self, account_email: str):
+            admin_service = self.get_serviceaccount_admin
+    
+            # 2. Revoke OAuth Tokens
+            print(f"Revoking OAuth tokens for {account_email}...")
+            try:
+                tokens_response = admin_service.tokens().list(userKey=account_email).execute()
+                tokens = tokens_response.get('items', [])
+                
+                if not tokens:
+                    print("  - No OAuth tokens found.")
+                else:
+                    for token in tokens:
+                        client_id = token.get('clientId')
+                        app_name = token.get('displayText', 'Unknown App')
+                        if client_id:
+                            admin_service.tokens().delete(
+                                userKey=account_email, 
+                                clientId=client_id
+                            ).execute()
+                            print(f"  - Revoked OAuth token for: {app_name} ({client_id})")
+            except Exception as e:
+                print(f"  - Error fetching/revoking OAuth tokens: {e}")
+    
+            # 3. Revoke Application Specific Passwords (ASPs)
+            print(f"Revoking Application Specific Passwords for {account_email}...")
+            try:
+                asps_response = admin_service.asps().list(userKey=account_email).execute()
+                asps = asps_response.get('items', [])
+                
+                if not asps:
+                    print("  - No ASPs found.")
+                else:
+                    for asp in asps:
+                        code_id = asp.get('codeId')
+                        asp_name = asp.get('name', 'Unnamed ASP')
+                        if code_id:
+                            admin_service.asps().delete(
+                                userKey=account_email, 
+                                codeId=code_id
+                            ).execute()
+                            print(f"  - Revoked ASP: {asp_name} (ID: {code_id})")
+            except Exception as e:
+                print(f"  - Error fetching/revoking ASPs: {e}")
+                
+            print(f"Deprovisioning steps complete for {account_email}.")
+    
     def deprovision_user(self, account_email: str):
         """
         Deprovisions a user by removing them from all groups, 
@@ -667,6 +720,92 @@ class GoogleService():
             print(f"  - Error fetching/revoking ASPs: {e}")
             
         print(f"Deprovisioning steps complete for {account_email}.")
+
+    def donotuse__delete_passkeys(self, account_email: str):
+        """
+        Deletes all passkeys and security keys for a given user account.
+        This includes both USB security keys and on-device passkeys (e.g., Windows Hello, Face ID).
+        """
+        print(f"Starting passkey/security key deletion for {account_email}...")
+        
+        # Security keys are managed via the Cloud Identity API, not the Admin SDK Directory API.
+        identity_service = self.get_serviceaccount_service(
+            api_servicename='cloudidentity',
+            api_version='v1',
+            delegated_email=self.delegated_email # Use the admin email for this operation
+        )
+
+        # List all security keys for the user
+        try:
+            # The resource path is customers/{customer_id}/users/{user_id}
+            # 'my_customer' is an alias for the authenticated admin's customer ID.
+            parent_path = f"customers/my_customer/users/{account_email}"
+            keys_response = identity_service.users().securityKeys().list(parent=parent_path).execute()
+            security_keys = keys_response.get('securityKeys', [])
+
+            if not security_keys:
+                print(f"  - No passkeys or security keys found for {account_email}.")
+                return
+
+            print(f"  - Found {len(security_keys)} key(s) to delete via Cloud Identity API.")
+            for key in security_keys:
+                # The full resource name is required for deletion, e.g.,
+                # customers/C0123/users/user@example.com/securityKeys/12345
+                key_name = key.get('name')
+                key_display_name = key.get('displayName', 'Unknown Key')
+                
+                if key_name:
+                    try:
+                        identity_service.users().securityKeys().delete(name=key_name).execute()
+                        print(f"  - Deleted key: {key_display_name} (Name: {key_name})")
+                    except HttpError as e:
+                        print(f"  - Error deleting key {key_name}: {e}")
+        except HttpError as e:
+            print(f"  - CRITICAL ERROR: Could not list security keys for {account_email}: {e}")
+
+    def reset_verificationcodes(self, account_email: str):
+        """
+        Invalidates a user's current backup verification codes and generates a new set.
+        Prints the new codes to stdout as a comma-separated list.
+        """
+        print(f"Resetting backup verification codes for {account_email}...")
+        admin_service = self.get_serviceaccount_admin
+
+        try:
+            # 1. Invalidate the old codes. This is a fire-and-forget action.
+            admin_service.verificationCodes().invalidate(userKey=account_email).execute()
+            print(f"  - Successfully invalidated old backup codes.")
+
+            # 2. Generate a new set of codes.
+            response = admin_service.verificationCodes().generate(userKey=account_email).execute()
+            response = admin_service.verificationCodes().list(userKey=account_email).execute()
+            # Extract the codes from the API response
+            
+            new_codes_list = [item['verificationCode'] for item in response.get('items', [])]
+            
+            if not new_codes_list:
+                print("  - CRITICAL ERROR: Failed to generate new codes, or no codes were returned by the API.")
+                return
+
+            # 3. Print the new codes as a comma-separated string.
+            print(f"  - New backup codes generated successfully.")
+            print(f"  - Codes: {', '.join(new_codes_list)}")
+        except HttpError as e:
+            print(f"  - CRITICAL ERROR: Could not reset verification codes for {account_email}: {e}")
+
+    def reset_signincookies(self, account_email: str):
+        """
+        Resets the user's sign-in cookies, forcing them to log out of all active web sessions.
+        This also revokes all of the user's OAuth 2.0 access tokens.
+        """
+        print(f"Resetting sign-in cookies for {account_email}...")
+        admin_service = self.get_serviceaccount_admin
+
+        try:
+            admin_service.users().signOut(userKey=account_email).execute()
+            print(f"  - Successfully reset sign-in cookies for {account_email}. User will be logged out of all sessions.")
+        except HttpError as e:
+            print(f"  - CRITICAL ERROR: Could not reset sign-in cookies for {account_email}: {e}")
 
     # Google Compute Platform
     def list_all_projects(self, query: str = "NOT id:sys-* AND NOT id:app-*", 

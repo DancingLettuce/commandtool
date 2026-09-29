@@ -15,6 +15,7 @@ sudo apt update && sudo apt install rsync -y
 import argparse   
 from pathlib import Path
 import sys  
+import csv
 
 
 def init_argparse():
@@ -52,6 +53,7 @@ def init_argparse():
     parser.add_argument("--truncate",  action="store_true",   help="Truncate the target first")
     parser.add_argument("--testrun",  action="store_true",   help="This is a testrun")
     parser.add_argument("--interactive",  action="store_true",   help="Interactive to get input")
+    parser.add_argument("--uselocallist",  action="store_true",   help="Use value of lib_localtest.locallist")
     parser.add_argument(
         "--configfile", 
         type=Path, # Argparse will automatically convert the string input to a Path object
@@ -107,7 +109,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SCRIPT_DIR.parent / "secrets" / "secrets.toml"
 DEFAULT_LOG_PATH = SCRIPT_DIR / "log.txt"
 ALLOWED_COMMANDS={
-    'menu':"", 'questionary':"",'upload':"",'transcribe':"",
+    'menu':"", 'questionary':"",'upload':"param1=folder location (default=.MP3)",'transcribe':"",
     'vault':"",'test':"",'approve_deviceuser':"",
     'delete_device':"",'list_delegates':"",'get_users':"",
     'list_user_groups':"",'delegate_sheet':"",
@@ -116,8 +118,16 @@ ALLOWED_COMMANDS={
     "deprovision_user":"", "unsuspend_user":"", "suspend_user":"",
     "delegate_account":"param1=mailbox param2=userwithaccess",
     "listallprojects":"all | quick","listallorganisations":"","listallfolders":"",
-    "listallprojects":"all | quick","listallorganisations":"","listallfolders":"","listallinstances":"param1=project_id","listallloadbalancers":"param1=project_id",
-    "listapis":"project_id","ingesttenable": "file_path"}
+    "listallinstances":"param1=project_id","listallloadbalancers":"param1=project_id",
+    "listapis":"project_id",
+    "ingesttenable": "file_path",
+    "ingestdnszone": "file_path",
+    "csvexplode":r"filepath col(default=4)",
+    "securityreset":"Delete passkey, Force PW change, Reset backup codes, Delete oAuth",
+    "accountreset": "userlist,options (p=reset pw, o=move ou, a=delete oauth," +
+    "b=reset backup codes,u=unsuspend/unarchive," + 
+    "r=reset sign in,u=unsuspend,s=suspend ) eg poabus"
+    }
   
 ARGS, ARBITRARY_ARGS = init_argparse()
 import lib_helper_lib as helperlib 
@@ -312,9 +322,9 @@ def transcribe_mp3():
             semantic_ip=CONFIG['SEMANTIC_IP'],
             supplied_context=supplied_context, 
             )    
-    meeting_data = transcribe.transcribe_audio(audio_file_path=file_to_transcribe) 
+    meeting_data = transcribe.transcribe_audio_text(audio_file_path=file_to_transcribe) 
     #text_vector = transcribe.generate_text_vector(meeting_data['meeting_summary'])
-    transcribe.insert_semantic_json(meeting_data)  
+    #transcribe.insert_semantic_json(meeting_data)  
     new_filename = f"{file_to_transcribe}.transcribed"
 
     try:
@@ -363,16 +373,20 @@ def delete_devices(delegated_email, service_account_file):
 def get_interactive_list(default_interactive=None):
     """Returns list of entries"""
     interactive_list = []
-    if ARGS.interactive:
-        interactive_list = helperlib.get_multiline_input()
-    elif ARGS.param1:
-        interactive_list = ARGS.param1
-    else:
-        interactive_list = default_interactive
-    if isinstance(interactive_list,str): 
-        interactive_list = interactive_list.replace(" ",",").replace("\n",",")
-        interactive_list = interactive_list.split(",")
-    return interactive_list
+    if ARGS.uselocallist:
+        interactive_list = lib_localtest.locallist
+    else:    
+        if ARGS.interactive:
+            interactive_list = helperlib.get_multiline_input()
+        elif ARGS.param1:
+            interactive_list = ARGS.param1
+        else:
+            interactive_list = default_interactive
+    if isinstance(interactive_list, str):
+        # Split the string by newlines or commas, strip whitespace from each item,
+        # and filter out any empty entries that might result.
+        return [item.strip() for item in interactive_list.replace(',', '\n').splitlines() if item.strip()]
+    return interactive_list # Return as-is if it's already a list
 
 def list_delegates(delegated_email, service_account_file):
     #account_emails = helperlib.get_multiline_input()
@@ -581,7 +595,7 @@ def main():
     elif args_command == 'delegate_sheet':
         delegate_sheet() 
     elif args_command in ('unsuspendmoveouresetpassword','suspend_user',
-                        'unsuspend_user'):
+                            'unsuspend_user'):
         unsuspend=False
         resetpassword=False
         movetodefaultou = False
@@ -746,8 +760,6 @@ def main():
         else:
             print(f"Invalid args_param1 {args_param1}")
         gh.list_all_projects(query=query, sqlh=sqlh) 
- 
-         
     elif args_command == "listallorganisations":
         sqlh = lib_sqlhandler.SqlAService(
                     cloud_cmdb_database_name =CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
@@ -853,9 +865,118 @@ def main():
                             cloud_cmdb_database_password=CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
                             cloud_cmdb_database_driver=CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
                         )
-        sqlh.truncate_table('ccm_tenable_staging')
-        sqlh.readanycsv(filepath=filepath)
+        sqlh.truncate_table('ccm_tenable_staging') 
+        sqlh.readcsv_tenable(filepath=filepath)
+        print(f"Success! File saved. {filepath}")
+    elif args_command == "ingestdnszone":
+            if not args_param1:
+                filepath = get_file(folder_path='', filetype='.csv', days=10)
+            else:
+                filepath = args_param1
+            if not filepath:
+                print(f"No file selected {filepath}")
+                return 
+            sqlh = lib_sqlhandler.SqlAService(
+                                cloud_cmdb_database_name=CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+                                cloud_cmdb_database_host=CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+                                cloud_cmdb_database_user=CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+                                cloud_cmdb_database_password=CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+                                cloud_cmdb_database_driver=CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+                            )
+            sqlh.truncate_table('ccm_dnszone_staging') 
+            sqlh.readcsv_dnszone(filepath=filepath)
+            print(f"Success! File saved. {filepath}")
+    elif args_command == "csvexplode":
+        if not args_param1:
+            print("No file passed as param1")
+            filepath = get_file(folder_path='', filetype='.csv', days=10)
+        else:
+            filepath = args_param1
+        if not args_param2:
+            print("No column passed as param2 using 4")
+            col = 4
+        else:
+            col = int(args_param2)  
+        if not filepath:
+            print(f"No file selected {filepath}")
+            return 
+        fileout = Path(filepath).stem + '_exploded.csv'
+        with open (filepath,'r') as fin, open(fileout, 'w') as fout:
+            reader = csv.reader(fin)
+            writer = csv.writer(fout)
+            for row in reader:
+                field = row[col-1]
+                values = row[col-1].split(",")
+                for value in values:
+                    writer.writerow(row + [value.strip()])
+        print(f"Success! File saved. {fileout}")
+    elif args_command == "securityreset":
+        gh = lib_googlehandler.GoogleService(
+                        delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                        service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                        google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]) ,
+                        googleuser_account_password_default=CONFIG.get('GOOGLEUSER_ACCOUNT_PASSWORD_DEFAULT',""),
+                        googleuser_default_hold_ou=CONFIG.get('GOOGLEUSER_DEFAULT_HOLD_OU',""),
+                        )
+        account_emails = get_interactive_list()
+        print(f"Resetting accounts {account_emails}")
+        
+        for account_email in account_emails:
+            account_email = account_email.strip() 
+            if not account_email or account_email =="":
+                continue
+            print(f"Processing {account_email}")
+            try:
+                # force password change on next logon
+                response = gh.patch_user(account_email=account_email, unsuspend=False,
+                                            resetpassword=False, 
+                                            movetodefaultou=False,
+                                            suspend=False,
+                                            pwresetnextlogin=True)
+                response = gh.revoke_oauthapplicationpwd_user(account_email=account_email)
+                #response = gh.reset_verificationcodes(account_email=account_email)
+                response = gh.reset_signincookies(account_email=account_email)
+            except Exception as e:
+                print(f"ERROR {account_email} {e}")
+                
+    elif args_command == "accountreset":
+        #userlist,options 
+        # (p=reset pw, o=move ou, a=delete oauth,b=reset backup codes,u=unsuspend/unarchive) 
+        # eg poabu"
+        if not args_param2 or args_param2=='':
+            print("Must have param2 ")
+            return 
+        gh = lib_googlehandler.GoogleService(
+                                delegated_email=CONFIG.get('ADMIN_EMAIL',""),
+                                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',""),
+                                google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]) ,
+                                googleuser_account_password_default=CONFIG.get('GOOGLEUSER_ACCOUNT_PASSWORD_DEFAULT',""),
+                                googleuser_default_hold_ou=CONFIG.get('GOOGLEUSER_DEFAULT_HOLD_OU',""),
+                                )
+        account_emails = get_interactive_list()
+        print(f"Resetting accounts {account_emails}")
 
+        for account_email in account_emails:
+            account_email = account_email.strip() 
+            if not account_email or account_email =="":
+                continue
+            print(f"Processing {account_email}")
+            try:
+                # force password change on next logon
+                response = gh.patch_user(account_email=account_email, 
+                        unsuspend='u' in args_param2,
+                        resetpassword='p' in args_param2,  
+                        movetodefaultou='o' in args_param2,
+                        suspend=not 'u' in args_param2,
+                        pwresetnextlogin=False)
+                if 'a' in args_param2:
+                    response = gh.revoke_oauthapplicationpwd_user(account_email=account_email)
+                if 'b' in args_param2:
+                    response = gh.reset_verificationcodes(account_email=account_email)
+                if 's' in args_param2:
+                    response = gh.reset_signincookies(account_email=account_email)
+            except Exception as e:
+                print(f"ERROR {account_email} {e}")
 
     else:  
         print(f"No command passed {args_command}.") 
