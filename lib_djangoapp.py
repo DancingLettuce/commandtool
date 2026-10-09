@@ -5,7 +5,7 @@ try:
 except Exception as e:
     print(f"WARNING lib_djangoapp {e}")
 
-class ConfigurationItemDummy:
+class ConfigurationItemDummy: 
     description="Configuration Item Not Found"
     def __init__(self,
                  name=None):

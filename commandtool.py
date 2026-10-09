@@ -126,7 +126,10 @@ ALLOWED_COMMANDS={
     "securityreset":"Delete passkey, Force PW change, Reset backup codes, Delete oAuth",
     "accountreset": "userlist,options (p=reset pw, o=move ou, a=delete oauth," +
     "b=reset backup codes,u=unsuspend/unarchive," + 
-    "r=reset sign in,u=unsuspend,s=suspend ) eg poabus"
+    "r=reset sign in,u=unsuspend,s=suspend " +
+    "g=delete groups) eg poabusg",
+    "syncalldirectoryusers":"",
+    "logoutstaleusers":""
     }
   
 ARGS, ARBITRARY_ARGS = init_argparse()
@@ -495,7 +498,238 @@ def delegate_sheet():
         
         print(line)
 
+def sync_all_directory_users(delegated_email, service_account_file):
+    """
+    Fetches all Google Workspace users via the Directory API.
+    Chunks 10 pages (up to 5,000 users) into memory before executing
+    batch DB lookups and bulk operations to drastically reduce DB hits.
+    """
+    # quick import
+    from gwa import models as gwa_models
+    from django.db import connection
+    from googleapiclient.errors import HttpError
+    import time
+    from django.utils import timezone
+    from django.utils.dateparse import parse_datetime
+    
+    # Setup the Client
+    gh = lib_googlehandler.GoogleService(
+                delegated_email=delegated_email,
+                service_account_file=service_account_file,)
+    
+    service = gh.get_serviceaccount_admin 
+    
+    table_name = gwa_models.StagingGoogleUser._meta.db_table
+    print(f"Truncating staging table: {table_name}")
+    with connection.cursor() as cursor:
+        cursor.execute(f'TRUNCATE TABLE {table_name};')
 
+    page_token = None
+    page_count = 0
+    total_processed = 0
+    
+    # --- Buffers for chunking ---
+    chunk_users_payload = []
+    pages_in_chunk = 0
+
+    print("Querying Directory API... (Alphabetical order by email)")
+    
+    while True:
+        page_count += 1
+        pages_in_chunk += 1
+        response = None
+        max_retries = 5
+        retry_attempt = 0
+        
+        # 1. Inner Retry Loop for API Limits
+        while retry_attempt < max_retries:
+            try:
+                print(f"Calling API page {page_count}")
+                response = service.users().list(
+                    customer='my_customer',
+                    maxResults=500,
+                    pageToken=page_token
+                ).execute()
+                break  
+                
+            except HttpError as e:
+                if e.resp.status in [503, 429, 500, 502, 504]:
+                    retry_attempt += 1
+                    print(f"[{e.resp.status}] Google backend busy. Sleeping 30s (Attempt {retry_attempt}/{max_retries})...")
+                    time.sleep(30)
+                else:
+                    print(f"CRITICAL HTTP ERROR on page {page_count}: {e}")
+                    raise e
+            except Exception as e:
+                print(f"CRITICAL UNKNOWN ERROR on page {page_count}: {e}")
+                raise e
+                
+        if not response:
+            print(f"Failed to fetch page {page_count}. Aborting sync.")
+            break
+
+        # 2. Add this page's users to our memory buffer
+        users_on_page = response.get('users', [])
+        chunk_users_payload.extend(users_on_page)
+        
+        page_token = response.get('nextPageToken')
+
+        # 3. Process the chunk if we hit 10 pages OR if this is the very last page
+        if pages_in_chunk == 10 or not page_token:
+            if chunk_users_payload:
+                print(f"Processing chunk of {len(chunk_users_payload)} users...")
+                current_time = timezone.now()
+                
+                batch_emails = [u.get('primaryEmail') for u in chunk_users_payload if u.get('primaryEmail')]
+                
+                # One single database read for 5,000 emails
+                existing_users_qs = gwa_models.GoogleUser.objects.filter(email__in=batch_emails)
+                existing_users_map = {user.email: user for user in existing_users_qs}
+                existing_users_qs = None
+                existing_users_map = None
+                
+                to_create = []
+                to_update = []
+                
+                for u in chunk_users_payload:
+                    email = u.get('primaryEmail')
+                    if not email:
+                        continue
+                        
+                    created_str = u.get('creationTime')
+                    login_str = u.get('lastLoginTime')
+                    
+                    parsed_created = parse_datetime(created_str) if created_str else None
+                    parsed_login = parse_datetime(login_str) if login_str else None
+                    
+                    new_user = gwa_models.StagingGoogleUser(
+                            email=email,
+                            api_lastseen=current_time,
+                            ou=u.get('orgUnitPath', ''),
+                            suspended=u.get('suspended', False),
+                            archived=u.get('archived', False),
+                            account_created=parsed_created,
+                            last_login=parsed_login,
+                            isadmin=u.get('isAdmin', False),
+                            isdelegatedadmin=u.get('isDelegatedAdmin', False),
+                            api_data=u
+                        )
+                    to_create.append(new_user)
+                        
+                # 4. Execute the Bulk Operations safely with batch_size
+                # 10 fields * 200 batch_size = 2000 parameters (safely under SQL Server's 2100 limit)
+                if to_create:
+                    gwa_models.StagingGoogleUser.objects.bulk_create(to_create, batch_size=200)
+                    
+                
+                    
+                total_processed += len(chunk_users_payload) 
+                print(f"-> DB Flush Complete | Inserted: {len(to_create)} | Updated: {len(to_update)} | Cumulative Total: {total_processed} email {email}  ")
+
+            # Reset the buffers for the next 10 pages
+            chunk_users_payload = []
+            pages_in_chunk = 0
+
+        # Exit condition 
+        if not page_token:
+            break
+
+
+    SQL="""truncate table gwa_googleuser;
+    INSERT INTO gwa_googleuser(email, chit, api_lastseen, ou, suspended, archived, account_created, last_login, api_data, isadmin, isdelegatedadmin)
+    SELECT email, chit, api_lastseen, ou, suspended, archived, account_created, last_login, api_data, isadmin, isdelegatedadmin
+    FROM gwa_staginggoogleuser ;"""
+    print(f"Truncating GoogleUser and inserting from staging.")
+    with connection.cursor() as cursor:
+        cursor.execute(SQL)   
+
+    print(f"Sync complete! Total Users Processed: {total_processed}")
+    
+def logout_stale_users(delegated_email, service_account_file, days_stale=60):
+    """
+    Finds all active users who haven't logged in for 'days_stale' (default 90)
+    and hits the Google Directory API to force a sign-out (revoke tokens).
+    Uses .iterator() to process large datasets without memory crashes.
+    """
+    from gwa import models as gwa_models
+    from django.db import connection
+    from googleapiclient.errors import HttpError
+    import time
+    from django.utils import timezone
+    from django.utils.dateparse import parse_datetime
+    from django.db.models import Q
+    
+    # Setup the Client
+    gh = lib_googlehandler.GoogleService(
+                delegated_email=delegated_email,
+                service_account_file=service_account_file,)
+    
+    service = gh.get_serviceaccount_admin 
+    
+    cutoff_date = timezone.now() - timedelta(days=days_stale)
+    print(f"Starting stale user logout. Cutoff date: {cutoff_date.strftime('%Y-%m-%d')}")
+    
+    # Query: Not suspended, not archived.
+    # AND (last_login is older than cutoff OR (last_login is NULL and account is older than cutoff))
+    stale_users_qs = gwa_models.GoogleUser.objects.filter(
+        suspended=False,
+        archived=False
+    ).filter(
+        Q(last_login__lte=cutoff_date) | 
+        Q(last_login__isnull=True, account_created__lte=cutoff_date)
+    )
+    
+    total_stale = stale_users_qs.count()
+    print(f"Found {total_stale} users matching criteria. Starting sign-out process...")
+    
+    if total_stale == 0:
+        return
+        
+    success_count = 0
+    error_count = 0
+    processed_count = 0
+    
+    # Use .iterator(chunk_size) to safely stream the 80k users from SQL Server
+    for user in stale_users_qs.iterator(chunk_size=2000):
+        processed_count += 1                
+        user_email = user.email
+        
+        # Inner Retry Loop for API Limits (429/503)
+        max_retries = 3
+        retry_attempt = 0
+        while retry_attempt < max_retries:
+            try:
+                # Execute the sign-out command
+                service.users().signOut(userKey=user_email).execute()
+                success_count += 1
+                break
+                
+            except HttpError as e:
+                # Catch 503 (Unavailable) and 429 (Rate Limit)
+                if e.resp.status in [503, 429, 500, 502, 504]:
+                    retry_attempt += 1
+                    time.sleep(2)  # Short sleep, signOut API recovers fast
+                else:
+                    # 404 (User not found) or 403 (Forbidden)
+                    error_count += 1
+                    print(f"[{processed_count}/{total_stale}] HTTP Error signing out {user_email}: {e.resp.status}")
+                    break
+            except Exception as e:
+                error_count += 1
+                print(f"[{processed_count}/{total_stale}] Unknown Error for {user_email}: {e}")
+                break
+                
+        # Progress logging
+        if processed_count % 10 == 0:
+            print(
+                f"Progress: {processed_count}/{total_stale} processed. "
+                f"(Success: {success_count}, Errors: {error_count}) "
+            )
+            
+    print(
+        f"Stale User Logout Complete! "
+        f"Processed: {processed_count}, Success: {success_count}, Errors: {error_count}. "
+    )
 
 
 
@@ -506,7 +740,17 @@ def main():
     args_command = ARGS.command 
     args_param1 = ARGS.param1
     args_param2 = ARGS.param2
-    if args_command not in ALLOWED_COMMANDS.keys(): 
+    
+    if args_command and args_command.startswith('*'):
+        allowed_commands_str = '\n** '.join(
+            f"{key} {value}" 
+            for key, value in ALLOWED_COMMANDS.items()
+            if args_command[1:].lower() in key.lower())
+
+        print(f'Command filter on {args_command[1:]}')
+        print(f"** {allowed_commands_str}")
+
+    elif args_command not in ALLOWED_COMMANDS.keys(): 
         allowed_commands_str = '\n** '.join(f"{key} {value}" for key, value in ALLOWED_COMMANDS.items())
         print(f"Command {args_command} not found. The possible commands are: {allowed_commands_str}")
     if (args_command == 'menu' or ARGS.command=='questionary') :
@@ -937,8 +1181,7 @@ def main():
                 #response = gh.reset_verificationcodes(account_email=account_email)
                 response = gh.reset_signincookies(account_email=account_email)
             except Exception as e:
-                print(f"ERROR {account_email} {e}")
-                
+                print(f"ERROR {account_email} {e}")            
     elif args_command == "accountreset":
         #userlist,options 
         # (p=reset pw, o=move ou, a=delete oauth,b=reset backup codes,u=unsuspend/unarchive) 
@@ -961,23 +1204,39 @@ def main():
             if not account_email or account_email =="":
                 continue
             print(f"Processing {account_email}")
+            suspend = None
+            unsuspend = None
+            if 'u' in args_param2:
+                unsuspend = True
+            if 's' in args_param2:
+                suspend = True
+            
             try:
                 # force password change on next logon
-                response = gh.patch_user(account_email=account_email, 
-                        unsuspend='u' in args_param2,
+                if 'u' in args_param2 or 's' in args_param2 or 'p' in args_param2 or 'o' in args_param2:
+                    response = gh.patch_user(account_email=account_email, 
+                        unsuspend=unsuspend,
                         resetpassword='p' in args_param2,  
                         movetodefaultou='o' in args_param2,
-                        suspend=not 'u' in args_param2,
+                        suspend=suspend,
                         pwresetnextlogin=False)
                 if 'a' in args_param2:
                     response = gh.revoke_oauthapplicationpwd_user(account_email=account_email)
                 if 'b' in args_param2:
                     response = gh.reset_verificationcodes(account_email=account_email)
-                if 's' in args_param2:
+                if 'r' in args_param2:
                     response = gh.reset_signincookies(account_email=account_email)
+                if 'g' in args_param2:
+                    response = gh.remove_usergroups(account_email=account_email)
             except Exception as e:
                 print(f"ERROR {account_email} {e}")
+    elif args_command == "syncalldirectoryusers":
+        sync_all_directory_users(delegated_email=CONFIG.get('ADMIN_EMAIL',''), 
+                    service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE','') )
 
+    elif args_command == "logoutstaleusers":
+        logout_stale_users(delegated_email=CONFIG.get('ADMIN_EMAIL',''), 
+                    service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE','') )
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  

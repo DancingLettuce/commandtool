@@ -541,16 +541,19 @@ class GoogleService():
             body=body
         ).execute()
     def patch_user(self,account_email: str, 
-                unsuspend:bool = False, 
+                unsuspend:bool = None, 
                 resetpassword:bool=False, 
                 movetodefaultou:bool=False,
                 suspend:bool = False,
                 pwresetnextlogin:bool = False,
                 ):
         body = {}  
-        if unsuspend:
+
+        if unsuspend == True:
             body["archived"] =False
             body["suspended"] = False
+        elif suspend == True:
+            body["suspended"] = True
         if resetpassword:
             body["password"] = self.googleuser_account_password_default
             body["changePasswordAtNextLogin"] = False
@@ -649,6 +652,27 @@ class GoogleService():
                 
             print(f"Deprovisioning steps complete for {account_email}.")
     
+    def remove_usergroups(self, account_email: str):
+        print(f"Fetching groups for {account_email}...")
+        groups = self.list_user_groups(account_email)
+        
+        if not groups:
+            print(f"  - User {account_email} is not a member of any groups.")
+        else:
+            for group in groups:
+                group_email = group.get('email')
+                if group_email:
+                    try:
+                        admin_service.members().delete(
+                            groupKey=group_email, 
+                            memberKey=account_email
+                        ).execute()
+                        
+                        print(f"  - Removed from group: {group_email}")
+                    except Exception as e:
+                        print(f"  - Error removing from {group_email}: {e}")
+
+        
     def deprovision_user(self, account_email: str):
         """
         Deprovisions a user by removing them from all groups, 
