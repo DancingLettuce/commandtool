@@ -1,4 +1,4 @@
-"""This filename is sqlhandler_models.py"""
+"""This filename is sqlhandler_models.py. Cloud Configuration Management"""
 
 # setup alembic
 
@@ -368,3 +368,29 @@ class CcmDnsZone(Base):
     suspended: Mapped[Optional[str]] = mapped_column(String(100), server_default="")
     countflag: Mapped[Optional[str]] = mapped_column(String(100), server_default="")
     modified: Mapped[Optional[str]] = mapped_column(String(100), server_default="")
+    
+
+class CmiEventLog(Base):
+    __tablename__ = "cmi_eventlog"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_on: Mapped[Optional[datetime]] = mapped_column(
+        DATETIMEOFFSET, server_default=text("getdate()")
+    )
+    updated_on: Mapped[Optional[datetime]] = mapped_column(
+            DATETIMEOFFSET, server_default=text("getdate()")
+        )
+    configurationitem_id: Mapped[int] = mapped_column(BigInteger)
+    event: Mapped[Optional[str]] = mapped_column(String(100), server_default="") # eg updated
+    description: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    eventsource: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    interaction: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    userid: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    ipaddress: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    event_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    fk_int: Mapped[int] = mapped_column(BigInteger)
+    fk_char: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    fk_model: Mapped[Optional[str]] = mapped_column(String(50), server_default="")
+    configurationitem_id: Mapped[int] = mapped_column(BigInteger)
+    ci_description: Mapped[Optional[str]] = mapped_column(String(250), server_default="")
+    ci_statuslabel: Mapped[Optional[str]] = mapped_column(String(1000), server_default="")
+

@@ -129,7 +129,8 @@ ALLOWED_COMMANDS={
     "r=reset sign in,u=unsuspend,s=suspend " +
     "g=delete groups) eg poabusg",
     "syncalldirectoryusers":"",
-    "logoutstaleusers":""
+    "logoutstaleusers":"",
+    "deleteoauthstaleusers":"options s=suspended only"
     }
   
 ARGS, ARBITRARY_ARGS = init_argparse()
@@ -192,6 +193,8 @@ except Exception as e:
 
 try:
     import lib_sqlhandler 
+    from sqlalchemy.orm import Session
+    import sqlhandler_models 
     import_lib_sqlhandler = True
 except Exception as e:
     import_lib_sqlhandler = False
@@ -388,7 +391,8 @@ def get_interactive_list(default_interactive=None):
     if isinstance(interactive_list, str):
         # Split the string by newlines or commas, strip whitespace from each item,
         # and filter out any empty entries that might result.
-        return [item.strip() for item in interactive_list.replace(',', '\n').splitlines() if item.strip()]
+        interactive_list = [item.strip() for item in interactive_list.replace(',', '\n').splitlines() if item.strip()]
+    interactive_list = set(interactive_list)
     return interactive_list # Return as-is if it's already a list
 
 def list_delegates(delegated_email, service_account_file):
@@ -731,7 +735,114 @@ def logout_stale_users(delegated_email, service_account_file, days_stale=60):
         f"Processed: {processed_count}, Success: {success_count}, Errors: {error_count}. "
     )
 
+def reset_stale_users(delegated_email, service_account_file, days_stale=60, command='', suspended=False):
+    """
+    Finds all active users who haven't logged in for 'days_stale' (default 90)
+    and hits the Google Directory API to force a sign-out (revoke tokens).
+    Uses .iterator() to process large datasets without memory crashes.
+    """
+    from gwa import models as gwa_models
+    from django.db import connection
+    from googleapiclient.errors import HttpError
+    import time
+    from django.utils import timezone
+    from django.utils.dateparse import parse_datetime
+    from django.db.models import Q
 
+    if 'logout' not in command and 'deleteoauth' not in command:
+        print(f"no command {command}") 
+        return 
+    command_logout = 'logout' in command
+    command_deleteoauth = 'deleteoauth' in command
+    
+    # Setup the Client
+    gh = lib_googlehandler.GoogleService(
+                delegated_email=delegated_email,
+                service_account_file=service_account_file,)
+    
+    service = gh.get_serviceaccount_admin 
+    
+    cutoff_date = timezone.now() - timedelta(days=days_stale)
+    print(f"Starting stale user {command}. Cutoff date: {cutoff_date.strftime('%Y-%m-%d')}")
+    
+    # Query: Not suspended, not archived.
+    # AND (last_login is older than cutoff OR (last_login is NULL and account is older than cutoff))
+    stale_users_qs = gwa_models.GoogleUser.objects
+    if suspended:
+        stale_users_qs = stale_users_qs.filter(
+            Q(suspended=suspended) |
+            Q(archived=suspended)
+        )
+    else:
+        stale_users_qs = stale_users_qs.filter(
+            suspended=suspended,
+            archived=suspended)
+    
+    stale_users_qs = stale_users_qs.filter(
+        Q(last_login__lte=cutoff_date) | 
+        Q(last_login__isnull=True, account_created__lte=cutoff_date)
+    )
+    
+    total_stale = stale_users_qs.count()
+    print(f"Found {total_stale} users matching criteria. Starting {command} process...")
+    
+    if total_stale == 0:
+        return
+        
+    success_count = 0
+    error_count = 0
+    processed_count = 0
+    
+    # Use .iterator(chunk_size) to safely stream the 80k users from SQL Server
+    for user in stale_users_qs.iterator(chunk_size=2000):
+        processed_count += 1                
+        user_email = user.email
+        
+        # Inner Retry Loop for API Limits (429/503)
+        max_retries = 3
+        retry_attempt = 0
+        while retry_attempt < max_retries:
+            try:
+                print(f"{user.email}, {user.last_login}, "
+                      f"{'suspended' if user.suspended else ''} "
+                      f"{'archived' if user.archived else ''} "
+                      f"{user.ou }"
+                      )
+                if command_logout:
+                    # Execute the sign-out command
+                    service.users().signOut(userKey=user_email).execute()
+                if command_deleteoauth:
+                    gh.revoke_oauthapplicationpwd_user(user_email)
+                    
+                success_count += 1
+                break
+                
+            except HttpError as e:
+                # Catch 503 (Unavailable) and 429 (Rate Limit)
+                if e.resp.status in [503, 429, 500, 502, 504]:
+                    retry_attempt += 1
+                    time.sleep(2)  # Short sleep, signOut API recovers fast
+                else:
+                    # 404 (User not found) or 403 (Forbidden)
+                    error_count += 1
+                    print(f"[{processed_count}/{total_stale}] HTTP Error resetting out {user_email}: {e.resp.status}")
+                    break
+            except Exception as e:
+                error_count += 1
+                print(f"[{processed_count}/{total_stale}] Unknown Error for {user_email}: {e}")
+                break
+                
+        # Progress logging
+        if processed_count % 10 == 0:
+            print(
+                f"Progress: {processed_count}/{total_stale} processed. "
+                f"(Success: {success_count}, Errors: {error_count}) "
+            )
+            
+    print(
+        f"Stale User Logout Complete! "
+        f"Processed: {processed_count}, Success: {success_count}, Errors: {error_count}. "
+    )
 
 
 def main():
@@ -1164,24 +1275,48 @@ def main():
                         )
         account_emails = get_interactive_list()
         print(f"Resetting accounts {account_emails}")
-        
-        for account_email in account_emails:
-            account_email = account_email.strip() 
-            if not account_email or account_email =="":
-                continue
-            print(f"Processing {account_email}")
-            try:
-                # force password change on next logon
-                response = gh.patch_user(account_email=account_email, unsuspend=False,
-                                            resetpassword=False, 
-                                            movetodefaultou=False,
-                                            suspend=False,
-                                            pwresetnextlogin=True)
-                response = gh.revoke_oauthapplicationpwd_user(account_email=account_email)
-                #response = gh.reset_verificationcodes(account_email=account_email)
-                response = gh.reset_signincookies(account_email=account_email)
-            except Exception as e:
-                print(f"ERROR {account_email} {e}")            
+        sqlh = lib_sqlhandler.SqlAService(
+                cloud_cmdb_database_name =CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
+                cloud_cmdb_database_host = CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
+                cloud_cmdb_database_user = CONFIG.get('CLOUD_CMDB_DATABASE_USER',''),
+                cloud_cmdb_database_password = CONFIG.get('CLOUD_CMDB_DATABASE_PASSWORD',''),
+                cloud_cmdb_database_driver = CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
+            )
+        n = 0
+        with Session(sqlh.engine) as session:
+            for account_email in account_emails:
+                account_email = account_email.strip() 
+                if not account_email or account_email =="":
+                    continue
+                n += 1
+                print(f"{n}/{len(account_emails)} Processing {account_email}")
+                try: 
+                    # force password change on next logon
+                    response = gh.patch_user(account_email=account_email, unsuspend=False,
+                                                resetpassword=False, 
+                                                movetodefaultou=False,
+                                                suspend=False,
+                                                pwresetnextlogin=True)
+                    response = gh.revoke_oauthapplicationpwd_user(account_email=account_email)
+                    #response = gh.reset_verificationcodes(account_email=account_email)
+                    response = gh.reset_signincookies(account_email=account_email)
+                    event_entry = sqlhandler_models.CmiEventLog(
+                        event="commandtool_securityreset",
+                        description=account_email + " security reset",
+                        fk_char=account_email,
+                        fk_model="ConfigurationItem",
+                        eventsource="commandtool securityreset",
+                    )
+                    session.add(event_entry)
+                except Exception as e:
+                    print(f"ERROR {account_email} {e}")            
+            session.commit()
+        sqlh.execute_sql("""update e
+            SET e.configurationitem_id = c.id
+            FROM cmi_eventlog e
+            INNER JOIN cmi_configurationitem c
+                ON e.fk_char = c.name
+            where e.configurationitem_id is null;""")
     elif args_command == "accountreset":
         #userlist,options 
         # (p=reset pw, o=move ou, a=delete oauth,b=reset backup codes,u=unsuspend/unarchive) 
@@ -1234,14 +1369,28 @@ def main():
         sync_all_directory_users(delegated_email=CONFIG.get('ADMIN_EMAIL',''), 
                     service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE','') )
 
-    elif args_command == "logoutstaleusers":
+    elif args_command == "logoutstaleusers":        
         logout_stale_users(delegated_email=CONFIG.get('ADMIN_EMAIL',''), 
                     service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE','') )
+    elif args_command == "deleteoauthstaleusers":
+        # s= suspended only
+        if not args_param2 or args_param2=='':
+            suspended = False
+        elif 's' in args_param2:
+            suspended = True
+        print("resetting")
+        reset_stale_users(delegated_email=CONFIG.get('ADMIN_EMAIL',''), 
+                service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',''), 
+                days_stale=300,
+                command='deleteoauth', suspended=True )
+
     else:  
         print(f"No command passed {args_command}.") 
     fl.print_summary()  
     print(f"Started:{tdiff.start_time_str} Total Duration: {tdiff.convert_timediff()}")
     tdiff = helperlib.TimeDiff()
+
+    
    
 if __name__ == "__main__":
     main()  
