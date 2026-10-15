@@ -16,6 +16,9 @@ import argparse
 from pathlib import Path
 import sys  
 import csv
+import smtplib
+from email.message import EmailMessage
+
 
 
 def init_argparse():
@@ -103,6 +106,12 @@ TOML_STRING="""# Auto-generated default configuration
     CLOUD_CMDB_DATABASE_USER = ""
     CLOUD_CMDB_DATABASE_PASSWORD = ""
     CLOUD_CMDB_DATABASE_DRIVER = ""
+    EMAIL_HOST = ''
+    EMAIL_USE_TLS = ""
+    EMAIL_PORT = ""
+    EMAIL_HOST_USER=''
+    EMAIL_HOST_PASSWORD=''
+    EMAIL_USER_LIST={} 
     """ 
 SCRIPT_DIR = Path(__file__).resolve().parent 
 #DEFAULT_CONFIG_PATH = SCRIPT_DIR / "secrets.toml" # for a local secrets or config file
@@ -114,7 +123,7 @@ ALLOWED_COMMANDS={
     'delete_device':"",'list_delegates':"",'get_users':"",
     'list_user_groups':"",'delegate_sheet':"",
     'unsuspendmoveouresetpassword':"",'transcribe_lecture':"param1=folderid",
-    'search_object':"",'moveou':"", "upload_file":"param1=folderid",
+    'search_object':"",'moveou':"", "upload_file":"to gdrive param1=folderid",
     "deprovision_user":"", "unsuspend_user":"", "suspend_user":"",
     "delegate_account":"param1=mailbox param2=userwithaccess",
     "listallprojects":"all | quick","listallorganisations":"","listallfolders":"",
@@ -141,6 +150,7 @@ from datetime import datetime as dt_datetime, timedelta  , timezone as dt_timezo
 import subprocess
 import json 
 import os  
+import getpass
  
 
 try:
@@ -203,7 +213,9 @@ except Exception as e:
 def upload_recent_file(folder_path: str,filetype: str='.mp3', days=7):
     file_to_copy= get_file(folder_path=folder_path, filetype=filetype, days=7)
 
-
+    if file_to_copy is None:
+        print(f"ERROR file is none folder_path={folder_path} days={days}")
+        sys.exit() 
     print(f"\nInitiating transfer for: {file_to_copy} to {CONFIG['SCP_DESTINATION_PATH']}") 
      
     # Construct the scp command as a list of arguments
@@ -844,6 +856,20 @@ def reset_stale_users(delegated_email, service_account_file, days_stale=60, comm
         f"Processed: {processed_count}, Success: {success_count}, Errors: {error_count}. "
     )
 
+def sendmail(subject: str='', body:str = ''):
+    email_user_list = CONFIG.get('EMAIL_USER_LIST',{})
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = CONFIG.get('EMAIL_HOST_USER','')
+    msg['To'] = email_user_list.get(getpass.getuser(),'')
+    msg.set_content(body)
+    
+    #with smtplib.SMTP_SSL(CONFIG.get('EMAIL_HOST',''), CONFIG.get('EMAIL_PORT','')) as smtp:
+    with smtplib.SMTP_SSL(CONFIG.get('EMAIL_HOST',''), 465 ) as smtp:
+        #smtp.ehlo() 
+        #smtp.starttls() 
+        smtp.login(CONFIG.get('EMAIL_HOST_USER',''), CONFIG.get('EMAIL_HOST_PASSWORD',''))
+        smtp.send_message(msg)
 
 def main():
     tdiff = helperlib.TimeDiff()
@@ -851,7 +877,8 @@ def main():
     args_command = ARGS.command 
     args_param1 = ARGS.param1
     args_param2 = ARGS.param2
-    
+    current_user = getpass.getuser()
+
     if args_command and args_command.startswith('*'):
         allowed_commands_str = '\n** '.join(
             f"{key} {value}" 
@@ -1386,7 +1413,10 @@ def main():
 
     else:  
         print(f"No command passed {args_command}.") 
+    print(f"Current user {current_user}")
     fl.print_summary()  
+    sendmail(f"mailtest {tdiff.start_time_str}", "mail body")
+
     print(f"Started:{tdiff.start_time_str} Total Duration: {tdiff.convert_timediff()}")
     tdiff = helperlib.TimeDiff()
 
