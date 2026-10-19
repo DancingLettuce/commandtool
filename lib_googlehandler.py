@@ -53,6 +53,7 @@ import sqlhandler_models as models
 @dataclass
 class GoogleService():
     delegated_email: str=""
+    scriptlog: helperlib.ScriptLog | None = None
     SCOPES = [ 
         'https://www.googleapis.com/auth/admin.directory.user',
         'https://www.googleapis.com/auth/admin.directory.group',
@@ -432,13 +433,14 @@ class GoogleService():
         print(f"Failed to delete {device_name} after {max_retries} attempts.")
         return False
   
-    def delegate_account(self, mastermailbox_email: str, clientaccount_email: str):
+    def delegate_account(self, mastermailbox_email: str, 
+                         clientaccount_email: str,):
         """
         Delegates the mastermailbox (leaver) to the clientaccount (grantee).
         Because this uses Domain-Wide Delegation impersonating the leaver, 
         Google automatically forces the delegation to 'accepted', bypassing the invite email.
         """
-        print(f"Delegating {mastermailbox_email}'s mailbox to {clientaccount_email}...")
+        self.scriptlog.print_log_file(f"Delegating {mastermailbox_email}'s mailbox to {clientaccount_email}...")
         
         # 1. Impersonate the leaver's account
         impersonated_creds = self.base_creds.with_subject(mastermailbox_email)
@@ -456,7 +458,7 @@ class GoogleService():
             ).execute()
             
             status = response.get('verificationStatus', 'unknown')
-            print(f"  -> Success! Mailbox delegated. Status: {status}")
+            self.scriptlog.print_log_file(f"  -> Success! Mailbox delegated. Status: {status}")
             return response
             
         except HttpError as e:
@@ -563,6 +565,7 @@ class GoogleService():
             body["suspended"] = True
         if pwresetnextlogin:
             body["changePasswordAtNextLogin"] = True
+        self.scriptlog.print_log_file(log_text=f"Patch {account_email} {body}",summary=True)
         return self.get_serviceaccount_admin.users().patch(
                     userKey=account_email, 
                     body=body
@@ -609,13 +612,13 @@ class GoogleService():
             admin_service = self.get_serviceaccount_admin
     
             # 2. Revoke OAuth Tokens
-            print(f"Revoking OAuth tokens for {account_email}...")
+            self.scriptlog.print_log_file(log_text=f"Revoking OAuth tokens for {account_email}",summary=True)
             try:
                 tokens_response = admin_service.tokens().list(userKey=account_email).execute()
                 tokens = tokens_response.get('items', [])
                 
                 if not tokens:
-                    print("  - No OAuth tokens found.")
+                    self.scriptlog.print_log_file(log_text=f"  - No OAuth tokens found for {account_email}.", summary=True)
                 else:
                     for token in tokens:
                         client_id = token.get('clientId')
@@ -625,18 +628,18 @@ class GoogleService():
                                 userKey=account_email, 
                                 clientId=client_id
                             ).execute()
-                            print(f"  - Revoked OAuth token for: {app_name} ({client_id})")
+                            self.scriptlog.print_log_file(log_text=f"  - Revoked OAuth token for: {app_name} ({client_id})", summary=True)
             except Exception as e:
-                print(f"  - Error fetching/revoking OAuth tokens: {e}")
+                self.scriptlog.print_log_file(log_text=f"  - Error fetching/revoking OAuth tokens: {e}",summary=True)
     
             # 3. Revoke Application Specific Passwords (ASPs)
-            print(f"Revoking Application Specific Passwords for {account_email}...")
+            self.scriptlog.print_log_file(log_text=f"Revoking Application Specific Passwords for {account_email}",summary=True)
             try:
                 asps_response = admin_service.asps().list(userKey=account_email).execute()
                 asps = asps_response.get('items', [])
                 
                 if not asps:
-                    print("  - No ASPs found.")
+                    self.scriptlog.print_log_file(log_text=f"  - No ASPs found for {account_email}.",summary=True)
                 else:
                     for asp in asps:
                         code_id = asp.get('codeId')
@@ -646,11 +649,11 @@ class GoogleService():
                                 userKey=account_email, 
                                 codeId=code_id
                             ).execute()
-                            print(f"  - Revoked ASP: {asp_name} (ID: {code_id})")
+                            self.scriptlog.print_log_file(log_text="  - Revoked ASP: {asp_name} (ID: {code_id})", summary=True)
             except Exception as e:
-                print(f"  - Error fetching/revoking ASPs: {e}")
+                self.scriptlog.print_log_file(log_text=f"  - Error fetching/revoking ASPs: {e}",summary=True)
                 
-            print(f"Deprovisioning steps complete for {account_email}.")
+            self.scriptlog.print_log_file(log_text=f"Deprovisioning steps complete for {account_email}.",summary=True)
     
     def remove_usergroups(self, account_email: str):
         print(f"Fetching groups for {account_email}...")
@@ -827,7 +830,7 @@ class GoogleService():
 
         try:
             admin_service.users().signOut(userKey=account_email).execute()
-            print(f"  - Successfully reset sign-in cookies for {account_email}. User will be logged out of all sessions.")
+            self.scriptlog.print_log_file(log_text=f"  - Successfully reset sign-in cookies for {account_email}. User will be logged out of all sessions.",summary=True)
         except HttpError as e:
             print(f"  - CRITICAL ERROR: Could not reset sign-in cookies for {account_email}: {e}")
 
@@ -1715,11 +1718,11 @@ class GoogleUser:
                         self.is_in_google_group_highlight = True    
     def is_active(self):
         return not (self.suspended or self.archived)  
-    def to_str(self):
+    def to_str(self): 
         if self.error:
             message = f"{self.email} ERROR {self.error}"
             return message
-        message = f"{self.email} {'(Inactive)' if not self.is_active() else ''}"
+        message = f"{self.email} {'(Inactive)' if not self.is_active() else 'Active'}"
         message += f"\n{self.orgunitpath}"
         message += f"\nCreated:{self.creationtime}"
         message += f"\nLogon:{self.lastlogintime}" 

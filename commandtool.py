@@ -111,7 +111,8 @@ TOML_STRING="""# Auto-generated default configuration
     EMAIL_PORT = ""
     EMAIL_HOST_USER=''
     EMAIL_HOST_PASSWORD=''
-    EMAIL_USER_LIST={} 
+    EMAIL_USER_LIST={} m
+    EMAIL_USER_TEST = ""
     """ 
 SCRIPT_DIR = Path(__file__).resolve().parent 
 #DEFAULT_CONFIG_PATH = SCRIPT_DIR / "secrets.toml" # for a local secrets or config file
@@ -436,12 +437,13 @@ def list_delegates(delegated_email, service_account_file):
 
     print(f"{message}") 
 
-def get_users(delegated_email, service_account_file):
+def get_users(delegated_email, service_account_file, scriptlog:helperlib.ScriptLog=None):
     account_emails = get_interactive_list(default_interactive=lib_localtest.delegateaccount)
     message= ""
     gh = lib_googlehandler.GoogleService(
             delegated_email=delegated_email,
             service_account_file=service_account_file,
+            scriptlog=scriptlog,
             )
     for account_email in account_emails:
         if not account_email:
@@ -455,13 +457,17 @@ def get_users(delegated_email, service_account_file):
             message += f" /Inactive ({'S' if account.get('suspended','') else ''}{'A' if account.get('archived','') else ''} )"
         message += f"\nCreated:{account.get('creationTime','')} "
         
-    print(f"{message}") 
+    scriptlog.print_log_file(f"{message}") 
 
-def get_google_users(delegated_email, service_account_file,google_group_highlight=[] ):
+def get_google_users(delegated_email, service_account_file, 
+                    google_group_highlight=[],
+                    scriptlog=None ):
     account_emails = get_interactive_list(default_interactive=lib_localtest.delegateaccount)
     gh = lib_googlehandler.GoogleService(
             delegated_email=delegated_email,
-            service_account_file=service_account_file,)
+            service_account_file=service_account_file,
+            scriptlog=scriptlog,
+            )
     message= ""
     for account_email in account_emails:
         if not account_email:
@@ -469,22 +475,27 @@ def get_google_users(delegated_email, service_account_file,google_group_highligh
         gu = gh.get_googleuser(account_email=account_email, google_group_highlight=google_group_highlight) 
         print()
         print("*" * 80)
-        print(gu.to_str())
+        scriptlog.print_log_file(gu.to_str(),summary=True)
         if gu.error:
             return  
 
 
-        print(gu.delegates_to_str())  
-        print(gu.groups_to_str())  
+        scriptlog.print_log_file(gu.delegates_to_str(),summary=True)  
+        scriptlog.print_log_file(gu.groups_to_str(),summary=True)  
         if gu.is_in_google_group_highlight:
-            print("Is found in control group")
+            scriptlog.print_log_file(f"Is found in control group {google_group_highlight}",summary=True)
         else:
-            print("MISSING from control group") 
+            scriptlog.print_log_file(f"MISSING from control group {google_group_highlight}") 
         cmi = lib_djangoapp.get_cmi(account_email)
         if cmi.description:
-            print(cmi.description)
+            scriptlog.print_log_file(cmi.description,summary=True)
         
         print()
+    mailbody = "\n".join(scriptlog.summary_clean)
+    sendmail(subject=f"User Details {dt_datetime.now(dt_timezone.utc).strftime('%Y-%m-%d-%H%M')}", 
+                body=f"User ` {account_emails} \n {mailbody}",
+                scriptlog=scriptlog)
+
 
 def list_user_groups(delegated_email, service_account_file):
     account_emails = get_interactive_list(default_interactive=lib_localtest.delegateaccount)
@@ -856,12 +867,18 @@ def reset_stale_users(delegated_email, service_account_file, days_stale=60, comm
         f"Processed: {processed_count}, Success: {success_count}, Errors: {error_count}. "
     )
 
-def sendmail(subject: str='', body:str = ''):
-    email_user_list = CONFIG.get('EMAIL_USER_LIST',{})
+def sendmail(subject: str='', body:str = '', email_user_to:str=None, scriptlog: helperlib.ScriptLog=None):
+    
     msg = EmailMessage()
     msg['Subject'] = subject
-    msg['From'] = CONFIG.get('EMAIL_HOST_USER','')
-    msg['To'] = email_user_list.get(getpass.getuser(),'')
+    mail_from = CONFIG.get('EMAIL_HOST_USER','')
+    msg['From'] = mail_from
+    if email_user_to:
+        email_to = email_user_to
+    else:
+        email_user_list = CONFIG.get('EMAIL_USER_LIST',{})        
+        email_to = email_user_list.get(getpass.getuser(),'')
+    msg['To'] = email_to
     msg.set_content(body)
     
     #with smtplib.SMTP_SSL(CONFIG.get('EMAIL_HOST',''), CONFIG.get('EMAIL_PORT','')) as smtp:
@@ -869,25 +886,25 @@ def sendmail(subject: str='', body:str = ''):
         #smtp.ehlo() 
         #smtp.starttls() 
         smtp.login(CONFIG.get('EMAIL_HOST_USER',''), CONFIG.get('EMAIL_HOST_PASSWORD',''))
-        smtp.send_message(msg)
+        smtp.send_message(msg) 
+    if scriptlog:
+        scriptlog.print_log_file(f"Email sent to {email_to} from {mail_from} subject {subject }") 
 
 def main():
     tdiff = helperlib.TimeDiff()
-    fl = helperlib.ScriptLog()   
+    scriptlog = helperlib.ScriptLog()   
     args_command = ARGS.command 
     args_param1 = ARGS.param1
     args_param2 = ARGS.param2
     current_user = getpass.getuser()
-
+    do_sendmail = False
     if args_command and args_command.startswith('*'):
         allowed_commands_str = '\n** '.join(
             f"{key} {value}" 
             for key, value in ALLOWED_COMMANDS.items()
             if args_command[1:].lower() in key.lower())
-
         print(f'Command filter on {args_command[1:]}')
         print(f"** {allowed_commands_str}")
-
     elif args_command not in ALLOWED_COMMANDS.keys(): 
         allowed_commands_str = '\n** '.join(f"{key} {value}" for key, value in ALLOWED_COMMANDS.items())
         print(f"Command {args_command} not found. The possible commands are: {allowed_commands_str}")
@@ -906,7 +923,7 @@ def main():
             filetype = '.mp3'
         print(folder_path) 
         upload_recent_file(folder_path=folder_path, filetype=filetype,  days=7)    
-        fl.print_log_file("jj", summary=True ) 
+        #scriptlog.print_log_file("jj", summary=True ) 
     elif args_command == 'transcribe':
         transcribe_mp3()
     elif args_command == 'vault':
@@ -922,9 +939,21 @@ def main():
         googlehandler.download_vault_export(export_id=export_id, 
                                             export_name=export_name) 
     elif args_command == 'test':
+        scriptlog.show_datetime = False 
+        helperlib.print_troubleshooting_info(scriptlog=scriptlog, showenv=False)
+        mailbody = "\n".join(scriptlog.summary_clean)
+        scriptlog.print_summary()   
+        print(f"Sending mail")
+        sendmail(f"script test {tdiff.start_time_str}", 
+                 body=mailbody, 
+                 #email_user_to=CONFIG.get('EMAIL_USER_TEST',''),
+                 scriptlog=scriptlog)
+        
+        """
         if not import_lib_localtest:
-                    print("No local test, exiting")
-                    return
+                            print("No local test, exiting")
+                            return
+                
         sqlh = lib_sqlhandler.SqlAService(
             cloud_cmdb_database_name =CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
             cloud_cmdb_database_host = CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
@@ -933,6 +962,8 @@ def main():
             cloud_cmdb_database_driver = CONFIG.get('CLOUD_CMDB_DATABASE_DRIVER',''),
         )
         sqlh.execute_sql(lib_localtest.mysql)
+        """
+
         """
         if not import_lib_localtest:
             print("No local test, exiting")
@@ -969,7 +1000,8 @@ def main():
         get_google_users( 
             delegated_email=CONFIG.get('ADMIN_EMAIL',''), 
             service_account_file=CONFIG.get('SERVICE_ACCOUNT_FILE',''),
-            google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[])) 
+            google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]),
+            scriptlog=scriptlog,)
     elif args_command == 'list_user_groups':
         list_user_groups(  
             delegated_email=CONFIG['ADMIN_EMAIL'], 
@@ -1119,9 +1151,12 @@ def main():
                                         google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]) ,
                                         googleuser_account_password_default=CONFIG.get('GOOGLEUSER_ACCOUNT_PASSWORD_DEFAULT',""),
                                         googleuser_default_hold_ou=CONFIG.get('GOOGLEUSER_DEFAULT_HOLD_OU',""),
+                                        scriptlog=scriptlog,
                                         )
+        do_sendmail=True
         gh.delegate_account(mastermailbox_email=args_param1, 
                             clientaccount_email=args_param2)
+        
     elif args_command == "listallprojects":
         """args_param1 = all | quick"""
         gh = lib_googlehandler.GoogleService(
@@ -1299,9 +1334,10 @@ def main():
                         google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]) ,
                         googleuser_account_password_default=CONFIG.get('GOOGLEUSER_ACCOUNT_PASSWORD_DEFAULT',""),
                         googleuser_default_hold_ou=CONFIG.get('GOOGLEUSER_DEFAULT_HOLD_OU',""),
+                        scriptlog=scriptlog,
                         )
         account_emails = get_interactive_list()
-        print(f"Resetting accounts {account_emails}")
+        scriptlog.print_log_file(log_text=f"Resetting accounts {account_emails}", summary=True)
         sqlh = lib_sqlhandler.SqlAService(
                 cloud_cmdb_database_name =CONFIG.get('CLOUD_CMDB_DATABASE_NAME',''), 
                 cloud_cmdb_database_host = CONFIG.get('CLOUD_CMDB_DATABASE_HOST',''),
@@ -1316,7 +1352,7 @@ def main():
                 if not account_email or account_email =="":
                     continue
                 n += 1
-                print(f"{n}/{len(account_emails)} Processing {account_email}")
+                scriptlog.print_log_file(f"{n}/{len(account_emails)} Processing {account_email}")
                 try: 
                     # force password change on next logon
                     response = gh.patch_user(account_email=account_email, unsuspend=False,
@@ -1344,6 +1380,10 @@ def main():
             INNER JOIN cmi_configurationitem c
                 ON e.fk_char = c.name
             where e.configurationitem_id is null;""")
+        mailbody = "\n".join(scriptlog.summary_clean)
+        sendmail(subject=f"Security Reset {tdiff.start_time_str}", 
+                         body=f"Security reset {account_emails} \n {mailbody}",
+                         scriptlog=scriptlog)
     elif args_command == "accountreset":
         #userlist,options 
         # (p=reset pw, o=move ou, a=delete oauth,b=reset backup codes,u=unsuspend/unarchive) 
@@ -1413,9 +1453,10 @@ def main():
 
     else:  
         print(f"No command passed {args_command}.") 
-    print(f"Current user {current_user}")
-    fl.print_summary()  
-    sendmail(f"mailtest {tdiff.start_time_str}", "mail body")
+
+    scriptlog.print_log_file(f"Current user {current_user}")
+    scriptlog.print_summary()  
+    #sendmail(f"mailtest {tdiff.start_time_str}", "mail body")
 
     print(f"Started:{tdiff.start_time_str} Total Duration: {tdiff.convert_timediff()}")
     tdiff = helperlib.TimeDiff()

@@ -69,8 +69,13 @@ class ScriptLog():
     summary: list = field(
         default_factory=lambda: []
         ) 
+    summary_clean: list = field(
+        default_factory=lambda: []
+        ) 
     filename: str = "log.txt"
     max_entries: int = 10
+    show_datetime: bool = True
+
     def print_log_file(self,log_text: str, summary:bool = False):
         current_log = []
         # --- 1. Read existing log entries ---
@@ -90,9 +95,14 @@ class ScriptLog():
         # --- 3. Create the new log entry ---
         # Format the timestamp as yyyy-mm-dd hh:mm
         timestamp = dt_datetime.now().strftime('%Y-%m-%d %H:%M')
-        new_entry = f"{timestamp} {log_text}"
+        if self.show_datetime:
+            new_entry = f"{timestamp} {log_text}"
+        else:
+            new_entry = f"{log_text}"
+        
         if summary:
             self.summary.append(new_entry)
+            self.summary_clean.append(log_text) 
         # Append the new entry
         current_log.append(new_entry)
 
@@ -107,8 +117,8 @@ class ScriptLog():
         except IOError as e:
             print(f"Error writing to log file {self.filename}: {e}")
             return False
-            
-        print(f"Log updated: {new_entry}")
+             
+        print(f"{new_entry}")
         return True
     def print_summary(self):
         print("#" * 80)
@@ -230,3 +240,61 @@ def batched(iterable, n):
     it = iter(iterable)
     while batch := tuple(islice(it, n)):
         yield batch
+
+def print_troubleshooting_info(scriptlog: ScriptLog = None, showenv: bool = False):
+    """Prints system, environment, and execution details to stdout."""
+    try:
+        import os
+        import sys
+        import getpass
+        import platform
+        import socket
+    except Exception as e:
+        print(f"ERROR can not import troubleshooting modules {e}")
+        if scriptlog:
+            scriptlog.print_log_file(f"ERROR can not import troubleshooting modules {e}")
+        return
+
+    scriptlog.print_log_file("=" * 50)
+    scriptlog.print_log_file(" TROUBLESHOOTING ENVIRONMENT DETAILS")
+    scriptlog.print_log_file("=" * 50)
+    
+    # User
+    try:
+        user = getpass.getuser()
+    except Exception as e:
+        user = f"Unknown (Error: {e})"
+    scriptlog.print_log_file(f"{'User':<20}: {user}",summary=True)
+    scriptlog.print_log_file(f"{'Hostname':<20}: {socket.gethostname()}",summary=True)
+    # System Datetime
+    scriptlog.print_log_file(f"{'System Datetime':<20}: {dt_datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')}",summary=True)
+    
+    # Working Directory
+    scriptlog.print_log_file(f"{'Working Dir (PWD)':<20}: {os.getcwd()}",summary=True)
+    
+    # Python Execution Paths & Versions
+    scriptlog.print_log_file(f"{'Python Executable':<20}: {sys.executable}",summary=True)
+    scriptlog.print_log_file(f"{'Python Version':<20}: {sys.version.split()[0]}",summary=True)
+    
+    # OS & Linux Version details
+    scriptlog.print_log_file(f"{'OS Platform':<20}: {platform.platform()}",summary=True)
+    scriptlog.print_log_file(f"{'Kernel Version':<20}: {platform.release()}",summary=True)
+    
+    # Specific Linux Distro details (works on Python 3.10+ on Linux)
+    if hasattr(platform, 'freedesktop_os_release'):
+        try:
+            os_info = platform.freedesktop_os_release()
+            scriptlog.print_log_file(f"{'Linux Distro':<20}: {os_info.get('PRETTY_NAME', 'Unknown')}",summary=True)
+        except OSError:
+            pass 
+
+    if showenv:
+        scriptlog.print_log_file("-" * 50)
+        scriptlog.print_log_file(" ENVIRONMENT VARIABLES")
+        scriptlog.print_log_file("-" * 50)
+        
+        # Print all environment variables sorted alphabetically
+        for key, value in sorted(os.environ.items()):
+            scriptlog.print_log_file(f"{key}={value}",summary=True)
+            
+    scriptlog.print_log_file("=" * 50)

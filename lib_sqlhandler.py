@@ -424,6 +424,25 @@ class SqlAService():
         print(f"Adding IP Address as configuration item")
         self.execute_sql(sql)
 
+    def append_cmieventlog(self, account_emails: list=None, event:str ='commandtool',
+                           description:str = '', eventsource:str='commandtool',
+                           ):
+        with Session(self.engine) as session:
+            for account_email in account_emails:
+                account_email = account_email.strip() 
+                if not account_email or account_email =="":
+                    continue
+                event_entry = sqlhandler_models.CmiEventLog(
+                                        event=event,
+                                        description=account_email + ' ' +description,
+                                        fk_char=account_email,
+                                        fk_model="ConfigurationItem",
+                                        eventsource=eventsource,
+                                    )
+                session.add(event_entry)
+            session.commit()
+
+
 
 
 
