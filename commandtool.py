@@ -1397,6 +1397,7 @@ def main():
                                 google_group_highlight=CONFIG.get('GOOGLE_GROUP_HIGHLIGHT',[]) ,
                                 googleuser_account_password_default=CONFIG.get('GOOGLEUSER_ACCOUNT_PASSWORD_DEFAULT',""),
                                 googleuser_default_hold_ou=CONFIG.get('GOOGLEUSER_DEFAULT_HOLD_OU',""),
+                                scriptlog=scriptlog, 
                                 )
         account_emails = get_interactive_list()
         print(f"Resetting accounts {account_emails}")

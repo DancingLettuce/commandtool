@@ -310,7 +310,7 @@ class GoogleService():
 
         ##
             # 6. The Unified Pipeline (Download -> Upload -> Keep Local)
-        print("\nStarting Unified Pipeline...")
+        print(f"\nVault {export_name} Saving to Drive... https://drive.google.com/drive/u/9/folders/{drive_folder_id}")
         for idx, f in enumerate(files, 1):
             bucket_name = f.get('bucketName')
             object_name = f.get('objectName')
@@ -365,7 +365,7 @@ class GoogleService():
                 print("DONEUPLOAD")
             except Exception as e:
                 print(f"FAILED UPLOAD: {e}")
-
+        print(f"\nVault {export_name} Shared in https://drive.google.com/drive/u/9/folders/{drive_folder_id}")
     def evaluate_and_approve_device_user(self, service, device_user_name):
         """
         Evaluates business logic for a specific device user before approving them.
@@ -458,7 +458,7 @@ class GoogleService():
             ).execute()
             
             status = response.get('verificationStatus', 'unknown')
-            self.scriptlog.print_log_file(f"  -> Success! Mailbox delegated. Status: {status}")
+            self.scriptlog.print_log_file(f"  -> Success! Mailbox {mastermailbox_email} delegated to {clientaccount_email}. Status: {status}")
             return response
             
         except HttpError as e:
@@ -658,7 +658,7 @@ class GoogleService():
     def remove_usergroups(self, account_email: str):
         print(f"Fetching groups for {account_email}...")
         groups = self.list_user_groups(account_email)
-        
+        admin_service = self.get_serviceaccount_admin
         if not groups:
             print(f"  - User {account_email} is not a member of any groups.")
         else:
